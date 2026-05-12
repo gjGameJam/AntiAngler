@@ -1,61 +1,68 @@
 import os
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from pathlib import Path
+from dotenv import load_dotenv
 
-def fetch_dark_vessels():
-    # 1. Fetch your token securely from GitHub Action Secrets
-    # Ensure you have mapped secrets.GFW_API_TOKEN to this environment variable in your workflow.yml
-    api_token = os.environ.get("GFW_API_TOKEN") 
-    
-    if not api_token:
-        raise ValueError("API Token missing! Please set the GFW_API_TOKEN environment variable.")
+SCRIPT_DIR = Path(__file__).resolve().parent
 
-    # 2. Set the required headers per the API Documentation
-    headers = {
-        "Authorization": f"Bearer {api_token}",
-        # Override the default python-requests user agent
-        "User-Agent": "AntiAngler-Pipeline/1.0 (Contact: your-email@example.com)", 
-        "Accept": "application/json"
+load_dotenv(SCRIPT_DIR / ".env")
+load_dotenv(SCRIPT_DIR.parent / ".env")
+
+token = os.getenv("GFW_API_TOKEN")
+
+if not token:
+    raise RuntimeError("Missing GFW_API_TOKEN")
+
+token = token.strip()
+
+url = "https://gateway.api.globalfishingwatch.org/v3/4wings/report"
+
+params = {
+    "datasets[0]": "public-global-fishing-effort:latest",
+    "date-range": "2024-01-01,2024-03-01",
+    "group-by": "VESSEL_ID",
+    "spatial-resolution": "LOW",
+    "temporal-resolution": "ENTIRE",
+    "format": "JSON",
+    "filters[0]": "geartype in ('trawlers')"
+}
+
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+}
+
+payload = {
+    "region": {
+        "dataset": "public-eez-areas",
+        "id": 8466
     }
+}
 
-    params = {
-        "start-date": "2026-05-09",
-        "end-date": "2026-05-12",
-        "bbox": "-18,10,-14,15",
-        "format": "json"
-    }
-    
-    base_url = "https://gateway.globalfishingwatch.org/v3"
-    endpoint = f"{base_url}/datasets/vessel-detections-s1:latest/data"
+response = requests.post(
+    url,
+    headers=headers,
+    params=params,
+    json=payload,
+    timeout=120
+)
 
-    # 3. Use a Session with a retry strategy for pipeline stability
-    session = requests.Session()
-    session.headers.update(headers)
-    
-    retries = Retry(
-        total=5,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]
-    )
-    session.mount('https://', HTTPAdapter(max_retries=retries))
+print("FINAL URL:")
+print(response.request.url)
 
-    # 4. Make the request
-    try:
-        response = session.get(endpoint, params=params, timeout=30)
-        response.raise_for_status() # Raises an exception for 4xx and 5xx status codes
-        
-        data = response.json()
-        print(f"Successfully fetched {len(data.get('entries', []))} records.")
-        return data
+print("\nHEADERS SENT:")
+print(response.request.headers)
 
-    except requests.exceptions.SSLError as e:
-        print(f"SSL handshake dropped by WAF/Gateway: {e}")
-        raise
-    except requests.exceptions.HTTPError as e:
-        print(f"HTTP Error: {e.response.status_code} - {e.response.text}")
-        raise
+print("\nSTATUS:")
+print(response.status_code)
 
-if __name__ == "__main__":
-    fetch_dark_vessels()
+print("\nBODY:")
+print(response.text[:5000])
+
+response.raise_for_status()
+
+data = response.json()
+
+print("\nSUCCESS")
+print(data.keys())
