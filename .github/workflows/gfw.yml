@@ -1,4 +1,4 @@
-name: Ocean Data Pipeline
+name: GFW Data Pipeline
 
 on:
   workflow_dispatch: # This lets you run it manually with a button
@@ -20,14 +20,13 @@ jobs:
       - name: Install Dependencies
         run: pip install requests python-dotenv
 
-      - name: Run Fetch Script
+      - name: Run GFW Fetch Script
         env:
-          # This pulls the token from GitHub's secret storage
           GFW_API_TOKEN: ${{ secrets.GFW_API_TOKEN }}
-        run: python scripts/satelite_fetch.py
+        run: python scripts/gfw_fetch.py
 
       - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
-          name: dark-vessel-report
+          name: gfw-fishing-effort-report
           path: scripts/data/
