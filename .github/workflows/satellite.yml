@@ -1,0 +1,33 @@
+name: Ocean Data Pipeline
+
+on:
+  workflow_dispatch: # This lets you run it manually with a button
+  schedule:
+    - cron: '0 0 * * *' # Runs daily at midnight
+
+jobs:
+  fetch-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install requests python-dotenv
+
+      - name: Run Fetch Script
+        env:
+          # This pulls the token from GitHub's secret storage
+          GFW_API_TOKEN: ${{ secrets.GFW_API_TOKEN }}
+        run: python scripts/satelite_fetch.py
+
+      - name: Upload Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dark-vessel-report
+          path: scripts/data/
