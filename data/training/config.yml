@@ -1,0 +1,9 @@
+# config.yml for YOLOv8 boat-detector training (in-repo, AntiAngler).
+# `path` is rewritten to this machine's absolute training dir by scripts/build_dataset.py.
+path: C:/gtest/AntiAngler/data/training
+train: images/train
+val: images/val
+test: images/test
+
+nc: 1
+names: ['boat']

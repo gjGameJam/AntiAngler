@@ -1,0 +1,23 @@
+# Runtime dependencies for AntiAngler.
+# Pinned exactly (==) for reproducibility. Bump manually when needed.
+#
+# Covers scripts/gfw_fetch.py, the .github/workflows/gfw.yml daily cron, and
+# scripts/sat_fetch.py. prep_polygons.py and view_polygons.py additionally need
+# pandas, geodatasets, and matplotlib — pin those here once they're installed
+# in a working local venv and verified.
+#
+# The stage 2-3 detection/review/refine loop (detect_boats.py, review_server.py,
+# export_labels.py) needs the heavier ML/web stack in requirements-ml.txt — kept
+# separate so the daily gfw cron does NOT pull torch. Install both when running it.
+
+requests==2.34.0
+python-dotenv==1.2.2
+
+# scripts/sat_fetch.py — Sentinel-2 imagery fetch + tiling. Heavier footprint:
+# rasterio and geopandas bundle GDAL/GEOS/PROJ (installed from PyPI wheels on
+# Windows, no separate GDAL needed). Verified in the local venv (Python 3.11).
+numpy==2.4.6
+rasterio==1.4.4
+geopandas==1.1.4
+pystac-client==0.9.0
+planetary-computer==1.0.0

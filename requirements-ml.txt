@@ -1,0 +1,16 @@
+# Stage 2-3 dependencies (detect_boats.py, review_server.py, export_labels.py).
+# Kept SEPARATE from requirements.txt on purpose: the daily gfw.yml cron installs
+# requirements.txt, and torch is a large download that job must not pull. Install
+# this only when running the detection/review/refine loop:
+#     pip install -r requirements-ml.txt
+# (requirements.txt is still needed too - it covers sat_fetch.py's rasterio stack.)
+#
+# Verified in the local venv (Python 3.11). On the Avast machine, pip needs
+# --cert "C:\ProgramData\Avast Software\Avast\wscert.pem" (see CLAUDE.md).
+
+ultralytics==8.4.90     # YOLOv8 inference; pulls torch + torchvision + opencv-python + pillow
+torch==2.12.1           # pinned explicitly (large, API-sensitive) - CPU build from PyPI
+torchvision==0.27.1
+fastapi==0.139.0        # review_server.py; pulls pydantic + starlette
+uvicorn==0.50.2         # ASGI server for review_server.py
+pillow==12.3.0          # GeoTIFF chip -> PNG for the review UI and label export

@@ -1,0 +1,28 @@
+{
+  "seed": 42,
+  "ratios": {
+    "train": 0.7,
+    "val": 0.2,
+    "test": 0.1
+  },
+  "export_tags": [
+    "2026-07-08"
+  ],
+  "active_learning_chips": 4,
+  "split_assignment": {
+    "train": [
+      "2026-07-07T11-36-29Z_bbox__chip_r00000_c00251",
+      "2026-07-07T11-36-29Z_bbox__chip_r00245_c00000"
+    ],
+    "val": [],
+    "test": [
+      "2026-07-07T11-36-29Z_bbox__chip_r00000_c00000",
+      "2026-07-07T11-36-29Z_bbox__chip_r00245_c00251"
+    ]
+  },
+  "base_kept": {
+    "train": 434,
+    "val": 124,
+    "test": 63
+  }
+}

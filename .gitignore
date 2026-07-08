@@ -210,4 +210,12 @@ data/raw/WDPA/WDPA_Sep2025_Public_shp_0/WDPA_Sep2025_Public_shp-points.prj
 data/raw/WDPA/WDPA_Sep2025_Public_shp_0/WDPA_Sep2025_Public_shp-points.dbf
 data/raw/WDPA/WDPA_Sep2025_Public_shp_0/WDPA_Sep2025_Public_shp-points.cpg
 .claude/settings.local.json
-.claude/settings.local.json
+
+# GFW raw API dumps — fetched daily by .github/workflows/gfw.yml
+data/raw/gfw/
+
+# Sentinel-2 imagery chip runs written by scripts/sat_fetch.py
+data/raw/sentinel2/
+
+# Human-labeled training exports produced by scripts/export_labels.py (planned)
+data/processed/training_exports/

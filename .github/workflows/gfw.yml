@@ -16,17 +16,24 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
 
       - name: Install Dependencies
-        run: pip install requests python-dotenv
+        run: pip install -r requirements.txt
 
       - name: Run GFW Fetch Script
         env:
           GFW_API_TOKEN: ${{ secrets.GFW_API_TOKEN }}
+          # Optional overrides — see `python scripts/gfw_fetch.py --help`:
+          # GFW_REGION_ID, GFW_REGION_DATASET, GFW_START, GFW_END, GFW_GEAR,
+          # GFW_GROUP_BY, GFW_SPATIAL_RESOLUTION, GFW_TEMPORAL_RESOLUTION,
+          # GFW_FORMAT, GFW_DATASET
         run: python scripts/gfw_fetch.py
 
       - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
           name: gfw-fishing-effort-report
-          path: scripts/data/
+          path: data/raw/gfw/
+          if-no-files-found: error

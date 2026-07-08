@@ -11,7 +11,9 @@
       "Bash(Get-ChildItem -Path \"C:\\\\gtest\\\\BoatDetection\" -Recurse)",
       "Bash(Select-Object FullName, PSIsContainer)",
       "Bash(Sort-Object FullName)",
-      "Bash(Format-Table -AutoSize)"
+      "Bash(Format-Table -AutoSize)",
+      "Bash(C:/gtest/AntiAngler/venv/Scripts/pip.exe freeze *)",
+      "Bash(git check-ignore *)"
     ]
   }
 }
