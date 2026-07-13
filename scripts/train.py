@@ -42,7 +42,13 @@ def parse_args():
     p = argparse.ArgumentParser(description="Train or fine-tune the YOLOv8 boat detector (in-repo).")
     p.add_argument("--weights", default=None,
                    help="'best' (fine-tune from best.pt), 'scratch' (new model from yolov8n), "
-                        "or a checkpoint path. Default: best.pt if it exists, else yolov8n.")
+                        "a checkpoint path, or a model .yaml (build a fresh arch, e.g. yolov8n-p2). "
+                        "Default: best.pt if it exists, else yolov8n.")
+    p.add_argument("--pretrained", default=None,
+                   help="Warm-start a fresh arch (a .yaml --weights) by transferring matching layers from "
+                        "this checkpoint (alias like 'yolov8n'/'best' or a path). Non-matching new layers "
+                        "(e.g. a P2 head) stay randomly initialised. Recommended for a --weights *.yaml on a "
+                        "small dataset; no-op-ish when --weights is already a .pt.")
     p.add_argument("--data", type=Path, default=DATA_YML, help="Dataset yaml (default data/training/config.yml).")
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--batch", type=int, default=16)
@@ -59,6 +65,17 @@ def parse_args():
     p.add_argument("--freeze", type=int, default=None,
                    help="Freeze the first N layers (e.g. 10 freezes the backbone; good for tiny AL sets).")
     p.add_argument("--patience", type=int, default=20, help="Early-stop patience (0 disables).")
+    # Small-object augmentation knobs. Default None = leave Ultralytics' default in place, so existing
+    # flows are unchanged. For 1-5 px vessels: mosaic downscales already-tiny objects (lower it / close
+    # it earlier), and copy_paste multiplies scarce positives. See docs/STATUS.md Phase 0.
+    p.add_argument("--mosaic", type=float, default=None,
+                   help="Mosaic aug probability (ultralytics default 1.0). Lower (~0.5) for tiny objects.")
+    p.add_argument("--close-mosaic", type=int, default=None,
+                   help="Disable mosaic for the last N epochs (ultralytics default 10). Higher closes it earlier.")
+    p.add_argument("--copy-paste", type=float, default=None,
+                   help="In-training copy-paste aug probability (ultralytics default 0.0).")
+    p.add_argument("--degrees", type=float, default=None,
+                   help="Random rotation degrees (ultralytics default 0.0); adds vessel-orientation variety.")
     p.add_argument("--fraction", type=float, default=1.0,
                    help="Fraction of the train set to use (e.g. 0.05 for a quick smoke run).")
     p.add_argument("--force", action="store_true",
@@ -75,6 +92,10 @@ def main():
     if not args.data.exists():
         raise SystemExit(f"Dataset yaml not found: {args.data}. Run scripts/build_dataset.py first.")
 
+    pretrained = resolve_weights(args.pretrained) if args.pretrained is not None else None
+    if pretrained is not None and not Path(pretrained).exists():
+        raise SystemExit(f"Pretrained checkpoint not found: {pretrained}")
+
     is_finetune = Path(weights).resolve() == BASELINE.resolve()
     lr0 = args.lr0 if args.lr0 is not None else (0.001 if is_finetune else None)
     # ultralytics' optimizer='auto' determines lr0 itself and IGNORES any lr0 we pass. To make a
@@ -86,11 +107,17 @@ def main():
     print("TRAIN")
     print(f"  mode      : {'FINE-TUNE' if is_finetune else 'FROM-SCRATCH'}")
     print(f"  weights   : {weights}")
+    if pretrained is not None:
+        print(f"  pretrained: {pretrained} (transfer matching layers into fresh arch)")
     print(f"  data      : {args.data}")
     print(f"  epochs={args.epochs} batch={args.batch} imgsz={args.imgsz} device={args.device} "
           f"fraction={args.fraction}")
     print(f"  optimizer={optimizer} lr0={lr0 if lr0 is not None else 'auto'} "
           f"freeze={args.freeze} patience={args.patience}")
+    aug_over = {k: v for k, v in (("mosaic", args.mosaic), ("close_mosaic", args.close_mosaic),
+                                  ("copy_paste", args.copy_paste), ("degrees", args.degrees)) if v is not None}
+    if aug_over:
+        print(f"  aug overrides: {aug_over}")
     print(f"  output    : data/training/runs/{args.name}"
           f"{' (force overwrite)' if args.force else ' (auto-increment)'}")
     if args.device == "cpu":
@@ -106,8 +133,16 @@ def main():
         kwargs["lr0"] = lr0
     if args.freeze is not None:
         kwargs["freeze"] = args.freeze
+    for name, val in (("mosaic", args.mosaic), ("close_mosaic", args.close_mosaic),
+                      ("copy_paste", args.copy_paste), ("degrees", args.degrees)):
+        if val is not None:
+            kwargs[name] = val
 
     model = YOLO(str(weights))
+    if pretrained is not None:
+        # Transfer matching layers (backbone + shared head) from the checkpoint into the fresh arch;
+        # non-matching new layers (e.g. the P2 head) keep their random init. Prints "Transferred X/Y".
+        model.load(str(pretrained))
     model.train(**kwargs)
 
     save_dir = Path(model.trainer.save_dir)

@@ -9,9 +9,9 @@ piece can be built and tested in isolation.
 ```
  ┌───────────┐   manifest.json   ┌───────────┐  detections.json  ┌───────────┐  reviews.json   ┌────────────┐
  │ 1 COLLECT │ ────────────────► │ 2 SCAN    │ ────────────────► │ 3 REPORT  │ ──────────────► │ RETRAIN    │
- │ sat_fetch │  georef RGB chips │detect_boats│  boats + lat/lon  │  + REVIEW │  human verdicts │ (BoatDetect)│
+ │ sat_fetch │  georef RGB chips │detect_boats│  boats + lat/lon  │  + REVIEW │  human verdicts │  in-repo   │
  └───────────┘                   └───────────┘                   └───────────┘                  └────────────┘
-      built                          built                           built                     exists; wire up
+      built                          built                           built                     built (in-repo)
                                                                         └──── active-learning loop ────┘
 ```
 
@@ -261,14 +261,16 @@ correct → keep box, incorrect → drop box (chip may become negative), missed 
 
 ---
 
-## The active-learning loop → retrain
+## The active-learning loop → retrain (in-repo)
 
-The verdicts are training signal. This is how a model trained on *oblique photos* (see the
-domain-gap note) becomes one that actually works on *overhead satellite* imagery — you bootstrap
-a satellite-domain dataset from your own reviewed scans.
+The verdicts are training signal. This is how a model trained on *high-resolution overhead boat
+photos* (see the domain-gap note) becomes one that works on *10 m Sentinel-2 chips* — you bootstrap
+a satellite-domain dataset from your own reviewed scans. **The whole retrain loop now lives in this
+repo** (no BoatDetection path-fixups): `export_labels.py` → `build_dataset.py` → `train.py` →
+promote → rescan.
 
-**New script: `scripts/export_labels.py`** — reads a run's `manifest.json` + `reviews.json`,
-takes every fully-reviewed chip, and writes a YOLO-format dataset:
+**`scripts/export_labels.py`** (stage 3) — reads a run's `manifest.json` + `reviews.json`, takes
+every fully-reviewed chip, and writes a YOLO-format dataset:
 
 ```
 data/processed/training_exports/<date>/
@@ -276,27 +278,53 @@ data/processed/training_exports/<date>/
   labels/<run>__chip_r00000_c00000.txt      # one line per kept box:  0 cx cy w h   (normalized)
 ```
 
-- Class id is `0` (BoatDetection is single-class `boat`).
-- Line format `class cx cy w h`, all normalized to [0,1] by chip width/height — **identical** to
-  what `BoatDetection/scripts/helpers/PascalToYolo.py:43-47` produces, so it drops straight in.
+- Class id is `0` (single-class `boat`).
+- Line format `class cx cy w h`, all normalized to [0,1] by chip width/height.
 - A reviewed chip with no surviving boxes → an **empty** `.txt` (a hard negative). Keep it.
 
-**Wire into BoatDetection** (`C:\gtest\BoatDetection`, the sibling repo — its model contract is in
-project memory):
+**`scripts/build_dataset.py`** (stage 4) — layers the accumulated exports onto the base dataset that
+lives directly in `data/training/images|labels/{train,val,test}` (the ~621 base boat photos named
+`boat<N>`, with the active-learning chips named `<run>__<chip>` on top). **Idempotent by
+construction:** each run first purges every `__` file, then re-adds the exports on a fixed seed, so
+the base photos are never touched and re-runs are reproducible. It also pins `config.yml`'s `path`
+to this machine and writes `active_learning_manifest.json` (split provenance).
 
-1. Point `BoatDetection/scripts/helpers/splitData.py` at `training_exports/<date>/` (it does the
-   70/20/10 split into `images/{train,val,test}` + `labels/...`). Optionally *merge* the satellite
-   exports with the original photo dataset, or train satellite-only once enough chips accumulate.
-2. **Fine-tune from the current weights, not from scratch:** in `BoatDetection/scripts/train.py`
-   change `YOLO("yolov8n.pt")` → `YOLO(".../best.pt")` so each round builds on the last. Keep
-   `imgsz=640` (matches the chips exactly).
-3. New `best.pt` → point stage 2's `--weights` at it → rescan → review again. Each loop the
-   detections get better and the reviewer's job gets lighter. That convergence *is* the product.
+```bash
+python scripts/build_dataset.py                 # pull all export tags
+python scripts/build_dataset.py --dry-run       # preview, write nothing
+```
 
-**Housekeeping blocker (from memory):** `BoatDetection/data/config.yml`, `train.py`, and
-`splitData.py` hardcode absolute paths to another machine
-(`C:\Users\bgern\Desktop\AIEng\BoatDetection\...`). Fix those to the local repo before retraining;
-inference (stage 2) only needs `best.pt` and is unaffected.
+**`scripts/train.py`** (stage 4) — trains/fine-tunes in-repo; paths resolve off `__file__`, so run
+it from anywhere. Weights live in `data/training/weights/` (`best.pt` = current model, `yolov8n.pt`
+= base). Every run writes to a fresh auto-incrementing `data/training/runs/<name>/`, so `best.pt` is
+**never clobbered** until you explicitly promote a new one.
+
+```bash
+python scripts/train.py --weights best      # FINE-TUNE from best.pt (active learning; lr0=0.001 SGD)
+python scripts/train.py --weights scratch   # train a NEW model from yolov8n
+```
+
+**Prefer fine-tune (`--weights best`) over scratch.** The base set is ~99% the aerial boat photos,
+so a from-scratch model just relearns those and keeps the satellite gap. Fine-tuning keeps the
+overhead-boat prior and adapts it to the tiny-vessel / cluttered regime the reviewed chips add (a
+10× lower `lr0` via a pinned SGD optimizer, so it adapts without forgetting the base photos).
+
+**Close the loop.** Evaluate the new weights on the held-out test split
+(`yolo detect val model=<run>/weights/best.pt data=data/training/config.yml split=test`); if better,
+promote it (`copy <run>\weights\best.pt data\training\weights\best.pt`); point stage 2's `--weights`
+at it → rescan → review again. Each loop the detections improve and the reviewer's job gets lighter.
+That convergence *is* the product.
+
+**Reality check on data volume.** The reviewed satellite set is still *tiny* — 4 chips today, split
+2 train / 0 val / 2 test — so one fine-tune establishes the loop and a baseline but won't transform
+satellite accuracy on its own. The real lever is **reviewing more `sat_fetch` runs** so
+`build_dataset.py` has a meaningful overhead-domain train/val/test split. Also mind timing: this
+box's 5-epoch CPU smoke fine-tune clocked ~23 h *wall-clock*, but the per-iteration times
+(~5–10 s/it, ~28 it/epoch) imply only minutes/epoch of real compute — it was asleep/throttled most
+of an overnight run. So CPU works only if the machine stays awake and unloaded (a 50-epoch run is
+then hours, not minutes); a GPU makes it trivial. Use a short `--epochs`/`--fraction` for smoke
+runs. And **build val/test from *different* scenes/dates** — the current 4 AL chips are all adjacent
+tiles of one Singapore scene, so train/test leak and eval numbers flatter the model.
 
 ---
 
@@ -427,9 +455,12 @@ Build against **one** stage-1 run dir end-to-end before scaling out.
       ✓/✗ + drawn boxes, "mark reviewed" gate, atomic `reviews.json`; security controls tested.
 - [x] **3b. Export** — `export_labels.py` built & verified: reviewed chips → `images/` + `labels/`
       (incl. empty-file hard negatives); label math matched a hand-computed value.
-- [ ] **retrain** — fix BoatDetection's hardcoded paths (see `docs/AUDIT.md` / model memory);
-      `splitData.py` on an export; fine-tune `train.py` from `best.pt`; rescan with the new weights;
-      confirm detections improved. *(next real step to close the loop)*
+- [x] **retrain tooling (in-repo)** — `build_dataset.py` (idempotently layers reviewed exports onto
+      the base set in `data/training/`) and `train.py` (fine-tune from `best.pt` or train fresh →
+      `data/training/runs/<name>/`) are built; no BoatDetection path-fixups needed.
+- [ ] **close the loop** — `build_dataset.py` → `train.py --weights best` → eval on the test split →
+      promote `best.pt` → rescan → confirm detections improved. *(first fine-tune run under way; the
+      reviewed satellite set is still tiny — 4 chips — so grow it by reviewing more runs.)*
 - [ ] **1-batch (later)** — `scan_mpas.py` to sweep all Ia/Ib marine MPAs (≤1° sub-AOIs). Needs the
       `main()`-guard refactor from `docs/AUDIT.md` P1.1 so `sat_fetch` functions are importable.
 - [ ] **violation events (later)** — join high-confidence in-MPA detections to the
@@ -439,11 +470,16 @@ Build against **one** stage-1 run dir end-to-end before scaling out.
 
 ## Cross-cutting concerns
 
-- **Domain gap (read this before trusting round 1).** `best.pt` was trained on the Kaggle "Boats
-  Boats Boats" set — oblique/side **photographs**, not top-down 10 m imagery. Expect poor
-  first-pass recall/precision on satellite chips. That is not a bug; it's *why* stage 3 exists —
-  the review UI doubles as a bootstrap labeler to build an overhead-domain dataset. Treat round-1
-  detections as *candidates to label*, not answers. (Full note in project memory.)
+- **Domain gap (read this before trusting round 1).** `best.pt` was trained on the Kaggle
+  "boats-boats-boats" object-detection set — **overhead/aerial photos** (same top-down angle as
+  satellite), but *high-resolution*: typically one large, sharp boat per frame on open water.
+  Sentinel-2 is the opposite regime — 10 m GSD, so vessels are **1–5 px specks** in cluttered
+  scenes (harbours, islands, cloud, dozens of boats per chip). **The gap is resolution + clutter +
+  density, not viewing angle** (a common misconception — verify by eyeballing a base `boat<N>.png`
+  next to a `<run>__chip*.png` in `data/training/images/train/`). Expect poor first-pass
+  recall/precision on satellite chips. That is not a bug; it's *why* stage 3 exists — the review UI
+  doubles as a bootstrap labeler to build a Sentinel-2-domain dataset. Treat round-1 detections as
+  *candidates to label*, not answers. (Full note in project memory.)
 - **10 m GSD limit.** A 30 m boat ≈ 3 px; sub-~15 m vessels are near-invisible. Sentinel-2 finds
   larger trawlers/cargo. The genuine "fine" pass is a different sensor — **Sentinel-1 SAR**
   (all-weather, detects dark/AIS-off vessels) — addable behind stage 1's existing

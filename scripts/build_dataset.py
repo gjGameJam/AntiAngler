@@ -40,6 +40,12 @@ def parse_args():
     p.add_argument("--val", type=float, default=0.2, help="Val fraction of the AL chips.")
     p.add_argument("--test", type=float, default=0.1, help="Test fraction (remainder).")
     p.add_argument("--seed", type=int, default=42, help="Shuffle seed for a reproducible AL split.")
+    p.add_argument("--holdout-scene", nargs="*", default=None, metavar="FILTER",
+                   help="Scene name-filter(s) (substrings of the run name). AL chips whose filename "
+                        "contains any filter are forced whole into the TEST split (a reproducible "
+                        "scene-aware holdout); all other AL chips split into train/val only. Prevents "
+                        "adjacent tiles of one scene leaking across splits. E.g. --holdout-scene "
+                        "fallbacktest portsaid.")
     p.add_argument("--no-purge", action="store_true",
                    help="Do not remove existing '__' files first (default is to purge for idempotency).")
     p.add_argument("--dry-run", action="store_true", help="Report only; copy/delete nothing.")
@@ -90,8 +96,19 @@ def purge_al_files(data_dir):
     return removed
 
 
-def split_stems(stems, ratios, seed):
+def split_stems(stems, ratios, seed, holdout_filters=None):
+    """Seeded random split. If holdout_filters are given, any stem containing one is forced WHOLE into
+    TEST (a reproducible scene-aware holdout) and the remaining chips split into train/val only."""
     rng = random.Random(seed)
+    holdout_filters = holdout_filters or []
+    if holdout_filters:
+        held = sorted(s for s in stems if any(f in s for f in holdout_filters))
+        held_set = set(held)
+        items = sorted(s for s in stems if s not in held_set)
+        rng.shuffle(items)
+        tv = ratios[0] + ratios[1]
+        n_tr = int((ratios[0] / tv) * len(items)) if tv > 0 else len(items)
+        return {"train": items[:n_tr], "val": items[n_tr:], "test": held}
     items = sorted(stems)          # deterministic base order, then a seeded shuffle
     rng.shuffle(items)
     n = len(items)
@@ -147,7 +164,11 @@ def main():
     base = count_base(data_dir)
     print(f"  base kept (untouched): train={base['train']} val={base['val']} test={base['test']}")
 
-    assignment = split_stems(list(pairs), ratios, args.seed)
+    assignment = split_stems(list(pairs), ratios, args.seed, args.holdout_scene)
+    if args.holdout_scene:
+        held = sorted(s for s in pairs if any(f in s for f in args.holdout_scene))
+        print(f"  holdout scenes -> TEST ({len(held)} chips via filters {args.holdout_scene}); "
+              f"rest split train/val only")
     print("  active-learning split: " + " ".join(f"{s}={len(v)}" for s, v in assignment.items()))
 
     if args.dry_run:
@@ -171,6 +192,7 @@ def main():
     manifest = {
         "seed": args.seed,
         "ratios": {"train": args.train, "val": args.val, "test": args.test},
+        "holdout_scene": args.holdout_scene,
         "export_tags": [t.name for t in tag_dirs],
         "active_learning_chips": len(pairs),
         "split_assignment": {s: sorted(v) for s, v in assignment.items()},

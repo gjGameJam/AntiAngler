@@ -169,7 +169,7 @@ HTML_TEMPLATE = r"""<!doctype html>
   .bar > i { display: block; height: 100%; background: #3fb950; width: 0%; }
   main { display: flex; gap: 14px; padding: 14px; align-items: flex-start; }
   #wrap { position: relative; line-height: 0; }
-  canvas { max-width: min(78vw, 82vh); border: 1px solid #2c313b; cursor: crosshair; touch-action: none; }
+  canvas { max-width: min(88vw, 88vh); border: 1px solid #2c313b; cursor: crosshair; touch-action: none; }
   aside { width: 300px; }
   .card { background: #1c2027; border: 1px solid #2c313b; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
   button { font: inherit; padding: 7px 11px; border-radius: 6px; border: 1px solid #3a414d;

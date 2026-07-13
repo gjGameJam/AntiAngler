@@ -126,8 +126,8 @@ def main():
     print(f"  source={run_dir.name}")
     print(f"  reviewed chips: {total}  (positive {n_pos}, negative {n_neg})  total boxes: {n_boxes}")
     print(f"  -> {out_dir}  (images/ + labels/)")
-    print("\nNext: point BoatDetection/scripts/helpers/splitData.py at this dir, then fine-tune")
-    print("      train.py from best.pt (see docs/PIPELINE.md).")
+    print("\nNext: run build_dataset.py to layer this export onto data/training/, then")
+    print("      train.py --weights best to fine-tune (see docs/PIPELINE.md).")
 
 
 if __name__ == "__main__":

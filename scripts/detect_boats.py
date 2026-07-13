@@ -20,16 +20,18 @@ from dotenv import load_dotenv
 # - Optionally keep only detections inside the MPA polygon (point-in-polygon)
 # - Write detections.json (+ detections.geojson for QGIS) into the run dir
 #
-# The model contract lives in C:\gtest\BoatDetection (YOLOv8n, single class 'boat',
-# imgsz 640). Domain-gap caveat: it was trained on oblique photos, not top-down 10 m
-# imagery, so first-pass detections are low-confidence CANDIDATES to review in stage 3,
-# not answers. See docs/PIPELINE.md.
+# The model is the in-repo YOLOv8n boat detector (data/training/weights/best.pt), single class
+# 'boat', trained + deployed at imgsz 1024 (upscaling the 640 chips is the dominant small-object
+# recall lever). Domain-gap caveat: base weights came from oblique photos, not top-down 10 m
+# imagery, so first-pass detections are CANDIDATES to review in stage 3, not answers.
+# See docs/PIPELINE.md and docs/STATUS.md.
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_GPKG = REPO_ROOT / "data" / "processed" / "wdpa_marine_ia_ib.gpkg"
-# BoatDetection is a sibling repo of AntiAngler (both under C:\gtest by default).
-DEFAULT_WEIGHTS = REPO_ROOT.parent / "BoatDetection" / "runs" / "train" / "boat_detection" / "weights" / "best.pt"
+# The in-repo promoted model — the active-learning loop trains and promotes here. (Originally the
+# sibling C:\gtest\BoatDetection best.pt; AntiAngler is now canonical.)
+DEFAULT_WEIGHTS = REPO_ROOT / "data" / "training" / "weights" / "best.pt"
 
 load_dotenv(SCRIPT_DIR / ".env")
 load_dotenv(REPO_ROOT / ".env")
@@ -50,11 +52,15 @@ def parse_args():
     p.add_argument("--run", type=Path, default=env_or("DET_RUN", None),
                    help="A sat_fetch run directory (contains manifest.json + chips/).")
     p.add_argument("--weights", type=Path, default=Path(env_or("DET_WEIGHTS", str(DEFAULT_WEIGHTS))),
-                   help="YOLOv8 .pt weights. Defaults to the sibling BoatDetection best.pt.")
-    p.add_argument("--conf", type=float, default=float(env_or("DET_CONF", 0.25)),
-                   help="Confidence threshold. Keep low (~0.25) for recall; stage 3 filters false positives.")
-    p.add_argument("--imgsz", type=int, default=int(env_or("DET_IMGSZ", 640)),
-                   help="Model input size; must match the chip size (640).")
+                   help="YOLOv8 .pt weights. Defaults to the in-repo promoted model "
+                        "(data/training/weights/best.pt).")
+    p.add_argument("--conf", type=float, default=float(env_or("DET_CONF", 0.15)),
+                   help="Confidence threshold. Default 0.15 = recall-leaning operating point: open-ocean "
+                        "recall is low, so favour catching more vessels (stage 3 / AIS-mismatch filters the "
+                        "extra false positives). Re-sweep with conf_sweep.py after each retrain to confirm.")
+    p.add_argument("--imgsz", type=int, default=int(env_or("DET_IMGSZ", 1024)),
+                   help="Model inference size. Default 1024: the promoted model is trained at 1024, and "
+                        "upscaling the 640 chips (1-5 px vessels -> 2-10 px) is the dominant recall lever.")
     p.add_argument("--merge-dist", type=float, default=float(env_or("DET_MERGE_DIST", 30.0)),
                    help="Merge detections whose centroids are within this many METRES (cross-chip dedup).")
     p.add_argument("--inside-mpa-only", action="store_true", default=truthy(env_or("DET_INSIDE_MPA_ONLY", "")),
