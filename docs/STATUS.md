@@ -1,6 +1,6 @@
 # STATUS — boat detector / active-learning loop
 
-_Snapshot: 2026-07-12. Point-in-time; verify against code before trusting specifics._
+_Snapshot: 2026-07-14. Point-in-time; verify against code before trusting specifics._
 
 This tracks the live state of the satellite ship-detection model and its active-learning
 loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatterns see
@@ -10,11 +10,12 @@ loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatte
 
 ## TL;DR
 
-- **Live model:** `data/training/weights/best.pt` = the **`finetune-openocean`** run (promoted 2026-07-12), **deployed at `imgsz 1024`, `conf 0.15`** — the YOLOv8n-**P2** arch (stride-4 head, strides [4,8,16,32]) retrained with real human-reviewed **open-ocean** training data (Fujairah + Gibraltar), warm-started from the prior P2 backbone. `detect_boats.py` defaults bake this in (in-repo `best.pt`, conf 0.15). Backups: `best_finetune-p2-1024.pt` (prior live, P2 Singapore-only), `best_finetune-aug-1024.pt`, `best_finetune-aug-640.pt`, `best_multiscene.pt`, `best_baseline_pre-multiscene.pt`.
+- **Live model:** `data/training/weights/best.pt` = the **`finetune-smallvessel`** run (promoted 2026-07-14), **deployed at `imgsz 1024`, `conf 0.15`** — the YOLOv8n-**P2** arch (stride-4 head, strides [4,8,16,32]) retrained after folding in real human-reviewed **small-fishing-vessel** Mediterranean scenes (Cyclades + Egadi), warm-started from the prior `finetune-openocean` backbone. `detect_boats.py` defaults bake this in (in-repo `best.pt`, conf 0.15). Backups: `best_finetune-openocean.pt` (prior live, cross-region big-ship), `best_finetune-p2-1024.pt` (P2 Singapore-only), `best_finetune-aug-1024.pt`, `best_finetune-aug-640.pt`, `best_multiscene.pt`, `best_baseline_pre-multiscene.pt`.
 - **The whole in-repo active-learning loop works** end-to-end: `sat_fetch → detect_boats → review_server → export_labels → build_dataset → train → promote → rescan`.
 - **Best result (imgsz 1024, plain-n):** on the clean held-out scene, deployment before/after — old (OLD@640, conf 0.25) → aug-1024 (NEW@1024, conf 0.20): instance **recall 0.31 → 0.73**, **precision 0.53 → 0.76**, **FP/chip 1.75 → 1.50**. The recall jump is the first statistically clean one (bootstrap CIs fully separate).
 - **P2 head (Phase 0 remainder, promoted 2026-07-12) — the last free detector lever, and it STACKED.** A stride-4 P2 detection head trained fresh at 1024 (warm-started backbone) beats the prior plain-n `aug-1024` model on the same holdout at the shared deploy point conf 0.20: **recall 0.73 → 0.77** (20 vs 19 TP), **precision 0.76 → 0.87**, **FP/chip 1.50 → 0.75** (half the false positives). At its F1-peak conf 0.15 it reaches **recall 0.85 / precision 0.85 / FP-chip 1.0** — beating live @0.20 on every axis. No base-domain regression (base mAP50 0.634 → 0.658, base R 0.618 → 0.649) and open-water FP probe `testrun` **37 → 7**. Chose conf 0.20 for a conservative FP posture. **Caveat unchanged:** same thin 26-box single-location (Singapore) holdout — recall CIs still overlap ([0.44,0.68] vs [0.43,0.88]), so magnitude is uncertain; a fresh cross-location scene is still needed to confirm. Cost: P2 is ~1.5× slower (12.2 vs 8.1 GFLOPs).
 - **Open-ocean retrain (promoted 2026-07-12, LIVE) — the data-collection loop, decisively validated.** Cross-validating the P2 model on FRESH open-ocean scenes exposed a catastrophic generalization gap: on a held-out dense-anchorage scene (Port Said, 42 boxes) it scored **recall 0.00** (0/42 @ conf 0.25) — the 0.77 Singapore number was wildly optimistic. Fix: fetched + human-reviewed real open-ocean scenes (Fujairah **131** boxes + Gibraltar **29**) through the in-repo loop, folded them into TRAIN (Port Said + Singapore held out via the new `build_dataset.py --holdout-scene`), retrained the P2 arch (warm-started, batch 4, 30 ep / 7 h). On the Port Said holdout (never trained on): **recall 0.00 → 0.67** @ conf 0.25 (**0.71 @ conf 0.15**, the swept F1 peak) at **precision 0.94–1.00, FP/chip 0–0.17**; recall CIs cleanly separated ([0,0] vs [0.52,0.79]). **No forgetting:** Singapore recall flat within noise (0.65→0.62) with precision UP (0.85→0.94), FP/chip DOWN (0.75→0.25); base mAP50 0.59→0.68. Two open-ocean scenes taught the model to detect a third in a new region. **Caveats:** Port Said is dense-anchored (same vessel *type* as Fujairah-in-train) → proves cross-*region*, not yet cross-*type* (small fishing boats untested); still one 42-box scene. **Next: scale the loop — more diverse open-ocean scenes, esp. small fishing vessels.**
+- **Small-vessel retrain (promoted 2026-07-14, LIVE) — cross-TYPE gap closed.** The open-ocean model was all big anchored ships; small fishing vessels were untested. Measured the honest cross-type baseline on a clean **Alonnisos** (Aegean) holdout — the openocean model scored **recall 0.31 / precision 0.25 @ conf 0.15** (a real capability gap, *not* the GSD ceiling: conf 0.05 recovered recall to 0.63 → the model saw the boats but under-scored them). Fix: fetched + human-reviewed two MPA-adjacent Mediterranean scenes (**Cyclades 219** + **Egadi 223** boat boxes) through the in-repo loop, folded into TRAIN (Alonnisos + Singapore + Port Said held out), retrained the P2 arch (warm-started from openocean, batch 4, 30 ep / 6.8 h). On the Alonnisos holdout (never trained on): **recall 0.31 → 0.67** @ conf 0.15 (TP 15→33, FN 34→16), **precision held at 0.25**, recall 90% CIs cleanly separated ([0.19,0.45] vs [0.54,0.80]). The lift is concentrated on the >5px boats (15/48 → 32/48). **No forgetting:** base-test mAP50 0.629→0.626, base R 0.568→0.556 (noise). Cost: false positives roughly doubled (FP/chip 0.70→1.55) — but `conf_sweep.py` confirms **conf 0.15 is F1-optimal** (F1 0.365, peak) and the new model **Pareto-dominates** the old (at equal precision 2.2× the recall; at equal recall, better precision), so no operating-point or deploy-conf change. **Caveats:** one 49-box scene; precision is inherently low at 10 m GSD → this is a candidate-generation feed for HITL review, where recall is the metric that matters. **Cross-region AND cross-type now both demonstrated. Next: more diverse scenes (small artisanal boats, other regions) + the AIS-fusion reframe.**
 - **The key finding — inference resolution is the dominant lever, not the retrain.** Just running the *existing* model at `imgsz 1024` (no training) lifted holdout recall **0.31 → 0.73** (1–5 px vessels → 2–10 px stop being sub-cell). The 5-h retrain at 1024 then bought a *cleaner frontier*: at matched recall (0.73) it has **~45% fewer false positives** than the raw-upscaled old model (FP/chip 1.5 vs 2.75). A conf sweep (`scripts/conf_sweep.py`) put the operating point at 0.20 (F1 near-peak; recall-vs-conf is steep, FP-vs-conf shallow).
 - **Earlier win (augmentation, superseded as live):** `scripts/augment_positives.py` water-gated copy-paste fixed the 11-vs-58 boat/empty imbalance → 113 boat chips / 722 boxes; that model is now the `_640` backup.
 - **Next levers:** (1) **scale the open-ocean data loop** — more diverse scenes, especially *small fishing vessels* (cross-type generalization is still unproven); (2) PlanetScope 3 m (Phase 1) for the physical GSD ceiling; (3) the AIS dark-vessel reframe (Phase 3, the operational payoff). The P2 head + real open-ocean data closed the biggest detector gaps; remaining gains are more/diverse data + better imagery. See `docs/ROADMAP.md`.
@@ -45,7 +46,8 @@ loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatte
 | `finetune-aug` (07-11) | +80 synth + 22 oversampled positive chips (copy-paste) | 0.444 / 0.31¹ | superseded (→ `_640` backup) |
 | `finetune-aug-1024` (07-11) | same data, retrained at **imgsz 1024** | 0.741 / 0.73² | superseded (→ `_aug-1024` backup) |
 | `finetune-p2-1024` (07-12) | same data, **P2 head** (stride-4) @ imgsz 1024, warm-started backbone | 0.773 / 0.77³ | superseded (→ `_p2-1024` backup) |
-| **`finetune-openocean` (07-12)** | +Fujairah(131)+Gibraltar(29) **real open-ocean** | SG R 0.62 (held); **Port Said open-ocean R 0.00→0.67**⁴ | ✅ **LIVE** |
+| `finetune-openocean` (07-12) | +Fujairah(131)+Gibraltar(29) **real open-ocean** | SG R 0.62 (held); **Port Said open-ocean R 0.00→0.67**⁴ | superseded (→ `_openocean` backup) |
+| **`finetune-smallvessel` (07-14)** | +Cyclades(219)+Egadi(223) **real small-vessel Med** | Alonnisos cross-type R **0.31→0.67**, base held⁵ | ✅ **LIVE** |
 
 ¹ `finetune-aug`/`finetune-aug-1024` numbers are from the rebuilt instance-level eval (mAP50 / instance-recall); earlier rows show the old IoU-mAP50 / mAP-recall. `finetune-aug` (imgsz 640, conf 0.25) beat the multiscene model on recall (0.19→0.31), precision (0.39→0.53), FP/chip (2.0→1.75). Trained from the *original baseline* on the rebalanced set, `--mosaic 0.5 --close-mosaic 15`.
 
@@ -55,20 +57,32 @@ loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatte
 
 ⁴ `finetune-openocean` = same P2 arch retrained after folding in **real human-reviewed open-ocean scenes** (Fujairah 131 + Gibraltar 29 boxes) fetched/reviewed through the in-repo loop. Port Said (dense-anchorage Med, 42 boxes) held out via `build_dataset.py --holdout-scene fallbacktest portsaid` (new flag; reproducible scene-aware split, no leakage). Instance recall on Port Said: **0.00 → 0.67** @ conf 0.25, **0.71 @ conf 0.15** (F1 peak per `conf_sweep.py --holdout portsaid`), precision 0.94–1.00, FP/chip 0–0.17. Singapore held (R 0.65→0.62, P 0.85→0.94, FP/chip 0.75→0.25); base mAP50 0.59→0.68. Command: `train.py --weights data/training/yolov8n-p2.yaml --pretrained best --imgsz 1024 --batch 4 --mosaic 0.5 --close-mosaic 15 --epochs 30`.
 
+⁵ `finetune-smallvessel` = same P2 arch, warm-started from the **openocean** `best.pt`, after folding in two real human-reviewed **small-fishing-vessel** MPA-adjacent Mediterranean scenes: Cyclades/Paros (219 boxes) + Egadi/Trapani (223 boxes), both fetched/reviewed through the in-repo loop. **Alonnisos** (Aegean, WDPAID 349993, 49 boxes) held out via `build_dataset.py --holdout-scene fallbacktest portsaid alonnisos` (dataset train 659 / val 189 / test 143). Cross-*type* holdout (small fishing boats — a vessel type absent from all prior training). Instance recall on Alonnisos @ conf 0.15: **0.31 → 0.67** (TP 15→33, FN 34→16), precision held 0.25, recall CIs [0.19,0.45]→[0.54,0.80] (separated); >5px stratum 15/48→32/48. No forgetting (base-test mAP50 0.629→0.626, R 0.568→0.556). FP/chip 0.70→1.55 but `conf_sweep.py --holdout alonnisos` shows conf 0.15 is the F1 peak (0.365) and NEW Pareto-dominates OLD across the PR curve → deploy conf unchanged. Command: `train.py --weights data/training/yolov8n-p2.yaml --pretrained best --imgsz 1024 --batch 4 --mosaic 0.5 --close-mosaic 15 --epochs 30 --name finetune-smallvessel`. 6.8 h on CPU.
+
 `finetune-reef` suppressed reef false positives but **lowered recall and base-domain mAP** — piling on hard negatives made the detector too conservative. That lesson drove Phase 0: fix the imbalance by adding *positives*, not more negatives. Left unpromoted in `runs/finetune-reef/`.
 
-## Current training data (4 reviewed scenes, 3 export tags)
+## Current training data (10 reviewed scenes)
 
-`data/processed/training_exports/{2026-07-08, 2026-07-10, 2026-07-11}` layered by `build_dataset.py`.
+Export tags under `data/processed/training_exports/` (`2026-07-08 … 2026-07-14`) layered by
+`build_dataset.py`; scene-aware split via `--holdout-scene fallbacktest portsaid alonnisos`
+→ **train 659 / val 189 / test 143**.
 
-| Scene (run dir) | Location | Chips | Boat boxes | Role |
+| Scene (run dir) | Location | Boat boxes | Role | Added by |
 |---|---|---|---|---|
-| `…11-36-29Z_bbox` | Singapore Jun-13 | 4 | ~153 | TRAIN (positives) |
-| `…11-44-23Z_fallbacktest` | Singapore Jul-5 | 4 | 26 | **TEST holdout** (recall) |
-| `…01-08-52Z_testrun` | False Bay ZA | 30 | 2 (+28 hard-neg) | TRAIN (open-water negatives) |
-| `…04-32-01Z_gbr-cairns-reefs` | GBR Cairns | 35 | 6 (+30 hard-neg) | TRAIN (reef negatives) |
+| `…11-36-29Z_bbox` | Singapore Jun-13 | ~153 | TRAIN (positives) | baseline AL |
+| `…11-44-23Z_fallbacktest` | Singapore Jul-5 | 26 | **TEST holdout** (cross-date) | baseline AL |
+| `…01-08-52Z_testrun` | False Bay ZA | 2 (+28 hard-neg) | TRAIN (open-water neg) | baseline AL |
+| `…04-32-01Z_gbr-cairns-reefs` | GBR Cairns | 6 (+30 hard-neg) | TRAIN (reef neg) | baseline AL |
+| Fujairah anchorage | UAE | 131 | TRAIN (open-ocean positives) | `finetune-openocean` |
+| Gibraltar | Strait | 29 | TRAIN (open-ocean positives) | `finetune-openocean` |
+| Port Said | Med (dense anchor) | 42 | **TEST holdout** (cross-region) | `finetune-openocean` |
+| `…22-38-08Z_cyclades-paros` | Cyclades, Aegean | 219 | TRAIN (small-vessel positives) | `finetune-smallvessel` |
+| `…22-38-35Z_egadi-trapani` | Egadi, Sicily | 223 | TRAIN (small-vessel positives) | `finetune-smallvessel` |
+| `…11-14-36Z_alonnisos-boundary` | Alonnisos, Aegean | 49 | **TEST holdout** (cross-type) | `finetune-smallvessel` |
 
-Balance problem in numbers: **~11 boat-bearing chips vs ~58 hard-negative chips.**
+Three clean held-out scenes now anchor eval: Singapore Jul-5 (cross-date), Port Said (cross-region),
+Alonnisos (cross-type small vessels). The original ~11-vs-58 boat/negative imbalance is long resolved —
+current TRAIN carries **~750+ real reviewed boat boxes** across big-ship + small-vessel domains.
 
 ---
 
@@ -84,17 +98,23 @@ Balance problem in numbers: **~11 boat-bearing chips vs ~58 hard-negative chips.
 
 ## Recommended next steps
 
-**Phase 0 is complete, and the cross-location "good enough" gate has now been run** — it exposed the
-Singapore-only model's ~0 open-ocean recall and the fix (real open-ocean data → `finetune-openocean`,
-LIVE at conf 0.15) closed it (Port Said 0.00→0.71). **The active-learning data loop is now the proven
-engine.** `build_dataset.py --holdout-scene` is implemented (reproducible scene-aware split). **The full
-forward plan — Phases 1–3 (PlanetScope 3 m, Sentinel-1 SAR, AIS dark-vessel fusion) — is in
-`docs/ROADMAP.md`.** Short version, in impact order:
-1. **Scale the open-ocean data loop — highest leverage, now proven.** Fetch/review more DIVERSE
-   open-ocean scenes, especially **small fishing vessels** (Port Said/Fujairah are big anchored ships;
-   cross-*type* generalization is unproven). Each fresh scene: hold it out, eval the live model on it
-   first (the honest number), then fold in and retrain. Keep at least one fresh scene as a rotating
-   holdout.
+**Phase 0 is complete, and BOTH generalization gates have now been run.** The cross-*location* gate
+exposed the Singapore-only model's ~0 open-ocean recall → fixed by real open-ocean data
+(`finetune-openocean`, Port Said 0.00→0.71). The cross-*type* gate exposed the openocean model's low
+recall on small fishing vessels (Alonnisos 0.31) → fixed by real small-vessel Med data
+(`finetune-smallvessel`, LIVE at conf 0.15, Alonnisos 0.31→0.67). **The active-learning data loop is the
+proven engine** and has now closed the two biggest generalization gaps end-to-end.
+`build_dataset.py --holdout-scene` is implemented (reproducible scene-aware split). **The full forward
+plan — Phases 1–3 (PlanetScope 3 m, Sentinel-1 SAR, AIS dark-vessel fusion) — is in `docs/ROADMAP.md`.**
+Short version, in impact order:
+1. **Keep scaling the data loop — still highest leverage.** Cross-region and cross-type are now both
+   demonstrated on single scenes each; the remaining diversity gaps are **small artisanal/pleasure boats**
+   (Alonnisos-class but even smaller) and **other regions/sea-states** (Atlantic, tropical, high-latitude).
+   Also worth a **second small-vessel holdout** to confirm the 0.67 magnitude (it's one 49-box scene).
+   Each fresh scene: hold it out, eval the live model on it first (the honest number), then fold in and
+   retrain. Keep at least one fresh scene as a rotating holdout. Watch the FP/chip trend — the
+   smallvessel model doubled it (0.70→1.55); if it keeps climbing, add reviewed empty-water hard
+   negatives from the *same* regions to rein in precision without costing recall.
 2. **Phase 1 (PlanetScope 3 m)** for the physical GSD ceiling, or **Phase 3 (AIS dark-vessel reframe)** —
    see the roadmap. Phase 3 is the operational payoff and makes even a modest-recall detector "good
    enough" by filtering the detector's false positives against AIS.

@@ -1,20 +1,22 @@
 # ROADMAP — improving the detector & building the MPA-violation product
 
-_Snapshot: 2026-07-11. Durable handoff for Phases 0(remainder)–3. Read `docs/STATUS.md` first
+_Snapshot: 2026-07-14. Durable handoff for Phases 0(remainder)–3. Read `docs/STATUS.md` first
 (live model, per-run eval numbers, open problems), then this. Original research/rationale:
 `~/.claude/plans/what-will-actually-improve-swirling-truffle.md` (user machine, not in repo)._
 
 ## Where we are
 
 The detector (`data/training/weights/best.pt`, YOLOv8n-**P2** on Sentinel-2 10 m RGB) is the
-**`finetune-openocean`** model, deployed at **imgsz 1024, conf 0.15**. Cross-validation exposed that
-the Singapore-only P2 model had **~0 recall on fresh open-ocean scenes** (Port Said held-out: 0.00);
-folding in real human-reviewed open-ocean data (Fujairah 131 + Gibraltar 29 boxes) lifted held-out
-open-ocean recall to **0.71 @ conf 0.15** with no forgetting (Singapore held, base mAP50 up). The
-dominant early lever was **inference resolution** (1–5 px → 2–10 px), then the **P2 stride-4 head
-stacked**, then **real open-ocean training data** proved the highest-leverage remaining move. **All of
-Phase 0 is done.** The active-learning data loop is now the proven engine; next is scaling its
-diversity (small fishing vessels) plus the imagery/AIS phases below.
+**`finetune-smallvessel`** model, deployed at **imgsz 1024, conf 0.15**. The active-learning data loop
+has now closed **both** generalization gates: cross-*region* (the Singapore-only P2 had ~0 recall on
+fresh open-ocean → real open-ocean data, Fujairah+Gibraltar, lifted Port Said held-out recall
+0.00→0.71) and cross-*type* (the openocean model recalled only 0.31 on small fishing vessels → real
+small-vessel Med data, Cyclades 219 + Egadi 223, lifted Alonnisos held-out recall **0.31→0.67 @ conf
+0.15**, precision held, no forgetting). The dominant early lever was **inference resolution** (1–5 px →
+2–10 px), then the **P2 stride-4 head stacked**, then **real, diverse training data** proved the
+highest-leverage remaining move — twice. **All of Phase 0 is done, and the loop is the proven engine.**
+Next is scaling data diversity further (smaller artisanal boats, more regions, a 2nd small-vessel
+holdout to confirm the 0.67 magnitude) plus the imagery/AIS phases below.
 
 **The remaining ceiling is physical:** at 10 m GSD a 20 m boat ≈ 2 px, near the optical information
 floor. Free model tricks are largely spent; the next real gains come from **better imagery** (Phases
