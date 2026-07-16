@@ -19,32 +19,69 @@ Next is scaling data diversity further (smaller artisanal boats, more regions, a
 holdout to confirm the 0.67 magnitude) plus the imagery/AIS phases below.
 
 **The remaining ceiling is physical:** at 10 m GSD a 20 m boat ≈ 2 px, near the optical information
-floor. Free model tricks are largely spent; the next real gains come from **better imagery** (Phases
-1–2) and from **reframing the goal as AIS-mismatch detection** (Phase 3), which is the actual product.
+floor. Free model tricks are largely spent, and there is **no free global higher-resolution optical**
+source to raise it (Phase 1 below is not pursued). So the next real gains come from **free SAR imagery**
+(Sentinel-1, Phase 2 — all-weather, finds dark/AIS-off vessels), **more/diverse training data**, and
+**reframing the goal as AIS-mismatch detection** (Phase 3), which is the actual product.
 
 ### Target architecture — how the phases combine
 ```
-DETECT                          CORRELATE                  CONFIRM
-S2 optical (P0, live)     ┐
-PlanetScope 3 m (P1)      ├─► vs AIS/GFW (P3) ─► dark? ─► tip-and-cue hi-res (P3, paid, per-alert)
-Sentinel-1 SAR (P2)       ┘         │
-                                    └─► violation_events (schema in CLAUDE.md)
+DETECT                       CORRELATE                  CONFIRM
+S2 optical  (P0, live)     ┐
+Sentinel-1 SAR (P2, built) ├─► vs AIS/GFW (P3) ─► dark? ─► S1×S2 cross-check + human review (free)
+                           ┘         │
+                                     └─► violation_events (schema in CLAUDE.md)
 ```
-Each phase ships value alone. **Recommended order (P0-remainder now done): P3 (or P1) → P2.** P3 is the
-highest strategic value and works even with a modest-recall detector; P1 sees more boats; P2 adds
-all-weather/night/dark coverage.
+Each phase ships value alone. **Recommended order: P2 (Sentinel-1 SAR — provider built, train the SAR
+detector next) and P3 (AIS fusion).** P3 is the highest strategic value and works even with a
+modest-recall detector; P2 adds free all-weather/night/dark coverage. Both free imagery providers
+(`pc`, `s1`) are built behind the `sat_fetch.py` seam (see the prerequisite section). Phase 1 (higher-res
+commercial optical) is **not pursued** — no free source; see below.
 
 ---
 
-## Cross-cutting prerequisite (do before P1/P2): AUDIT P1.1 — the `main()`-guard refactor
+## Cross-cutting prerequisite (do before P1/P2): AUDIT P1.1 — the `main()`-guard refactor ✅ DONE (2026-07-15)
 
-`sat_fetch.py` runs its orchestration at **module top-level (from line 409)** — `parse_args()` and a
-full fetch execute on *import*. The seam functions we need to reuse for a new imagery source —
-`open_catalog` (:198), `search_candidates` (:204), `assess_aoi` (:249), `select_scene` (:280),
-`read_aoi` (:305), `scale_to_uint8` (:333) — are therefore **not importable**. Any Phase 1/2
-connector must first wrap lines 409-end in `def main():` under `if __name__ == "__main__":`, leaving
-the helpers importable. This is AUDIT.md item #1 ("highest-leverage change for stages 2–3"); it
-unblocks both imagery phases and unit testing. **Effort: low. Do it first.**
+**Done.** The former module-top-level orchestration (was `sat_fetch.py:409-529`) is now wrapped in
+`def main(argv=None):` guarded by `if __name__ == "__main__": raise SystemExit(main())`, and
+`parse_args(argv=None)` takes an optional argv (so importers/tests can supply args explicitly instead
+of hijacking `sys.argv`). Importing `sat_fetch` no longer runs `parse_args()` or a fetch.
+
+**What is now importable and reusable** (compose these for a new provider — none of them touch argv or
+do any I/O beyond their one job):
+
+| Seam function | Signature | Role in the fetch |
+|---|---|---|
+| `open_catalog(stac_url, sub_key)` | → STAC `Client` | Open + auth the catalog (PC signing modifier) |
+| `search_candidates(catalog, collection, bbox, start, end, max_cloud, max_search)` | → `[Item]` | Scene-wide prefilter, least-cloud-first |
+| `assess_aoi(item, bbox, insecure_tls, probe_res=60.0)` | → `{aoi_coverage, aoi_cloud, …}` | AOI-specific coverage/clarity probe (SCL) |
+| `select_scene(candidates, bbox, insecure_tls, min_coverage, max_aoi_cloud)` | → `(item, rec, assessed, fallback)` | Pick first scene that passes, else best-effort |
+| `read_aoi(item, bbox, bands, resolution, insecure_tls)` | → `(stack[C,H,W], transform, crs, valid)` | Windowed COG read clipped to bbox in native UTM |
+| `scale_to_uint8(stack, valid, mode, stretch_max, stretch_pct)` | → `(uint8_stack, params)` | Reflectance → 8-bit RGB stretch |
+
+Plus the provider-agnostic tiling/geo/IO helpers that a new provider reuses **unchanged**:
+`_decimated_read`, `_gdal_env`, `tile_offsets`, `iter_chips`, `chip_geo`, `write_chip_geotiff`,
+`write_manifest`, `validate_bbox`, `resolve_date_range`.
+
+**How a new provider composes them:** the S2-specific pieces are exactly `open_catalog` (auth),
+`search_candidates` (the `eo:cloud_cover` query), `assess_aoi` (the SCL mask), and `scale_to_uint8`
+(the reflectance stretch). A Sentinel-1 (or other) connector supplies its own version of *those four*
+plus a `read_aoi`-shaped reader, and feeds the same `iter_chips`/`chip_geo`/`write_*` tail — so the
+run-dir/manifest data contract downstream stages read is identical. See the per-phase "generalize the
+S2 leaks" notes below for the exact fields to swap.
+
+**Update (2026-07-15): the provider registry is built, and both free providers are live.** The six seam
+functions moved onto a `Provider` object (`scripts/providers/base.py` interface, `providers/pc.py` =
+Sentinel-2 optical, `providers/s1.py` = Sentinel-1 SAR), `--provider {pc,s1}` selects one, and `main()`
+routes through it while staying the orchestrator. The seam names above are still importable from
+`sat_fetch` (back-compat bound-method aliases). A new source is now a new `Provider` subclass + one
+`register()` line. **`providers/s1.py` (Sentinel-1 GRD SAR) is fully implemented** (Phase 2 provider,
+below). Higher-res commercial optical (the old Phase 1) is **not pursued** — the project is $0-budget
+and there is no free global source (see Phase 1).
+
+**Verified:** `import sat_fetch` runs no fetch; the six seams + `main` are callable; `--help` exits 0;
+the no-AOI path still raises + exits 1. This was AUDIT.md item #1; it unblocks both imagery phases and
+unit testing (helpers can now be called on synthetic STAC items without a network fetch).
 
 ---
 
@@ -79,61 +116,76 @@ chips and it doesn't address the sub-cell problem — try only if P2 plateaus.
 
 ---
 
-## Phase 1 — PlanetScope ~3 m imagery (free for research)
+## Phase 1 — Higher-resolution optical (NOT PURSUED — no free source)
 
-**Goal:** biggest per-pixel gain for sub-20 m boats — at 3 m a 20 m boat is ~7 px (vs ~2 px at 10 m).
-**Not** a `--collection` flip: PlanetScope is **not on Planetary Computer**; it needs Planet's own API +
-a research account, plus generalizing the S2-specific assumptions that leak past the seam.
-
-**Prerequisites:** the P1.1 main-guard refactor (above); a Planet Education & Research account
-(≤3,000 km²/mo free — https://www.planet.com/industries/education-and-research/); Planet API key in
-`.env` (mirror the `GFW_API_TOKEN` / `SAT_*` env pattern).
-
-**Steps:**
-1. **New connector behind the existing seam names.** Add a Planet implementation of `open_catalog` /
-   `search_candidates` / `select_scene` / `read_aoi` (Planet Orders/Data API + `planet` SDK, or STAC if
-   using Sentinel Hub's Planet integration). Select the source with a `--provider {pc,planet}` flag.
-2. **Generalize the S2 leaks past the seam:**
-   - **Cloud gate:** `assess_aoi` uses the Sentinel-2 **SCL** codes (`SCL_OBSCURED = (1,3,8,9,10)`, :245).
-     PlanetScope ships its own **UDM2** usable-data mask — swap the mask source per provider.
-   - **STAC prefilter:** `search_candidates` queries `eo:cloud_cover` (:209) — Planet exposes
-     `cloud_percent`; abstract the field name.
-   - **Reflectance stretch:** `scale_to_uint8` assumes S2 surface reflectance (`stretch_max≈3000`, :333–340).
-     PlanetScope SR has its own scaling — parameterize per provider so 8-bit RGB matches training preproc.
-3. **Train a separate 3 m model** (different GSD → keep the S2 model separate; a fresh fine-tune, its own
-   `best.pt`). Chips are still 640 px → the imgsz-1024 lesson likely still applies; re-sweep conf.
-
-**Data contract:** unchanged — output is the same run dir (`chips/*.tif` self-describing + `manifest.json`),
-so `detect_boats.py` / `review_server.py` / `export_labels.py` work as-is.
-**Verification:** `--dry-run` the Planet source over a known AOI (candidate table) → fetch → eyeball chips
-→ `detect_boats.py` → confirm the 3 m model beats S2 on the same-area targets.
-**Effort: medium.** Sources: Kanjir survey (min detectable ~20–30 m @10 m), Planet E&R.
+> **Not pursued (2026-07-15).** Raising the 10 m GSD was the original Phase 1 (a 20 m boat is ~7 px
+> at 3 m vs ~2 px at 10 m), but there is **no free global higher-resolution optical source**, and
+> this is a **$0-budget** project — commercial 3 m optical (paid tasking/archive) is out of scope.
+> The only free sub-10 m optical is **NAIP** (0.6–1 m, on Planetary Computer, no credentials) but it
+> is **US-only and ~annual** — useful for CONUS MPAs and for generating high-res *training* chips,
+> not global near-real-time patrol. If a CONUS-only NAIP source is ever wanted it slots into the same
+> seam as a new `providers/naip.py`. Otherwise the free levers for small-vessel detection are
+> **Phase 2 (Sentinel-1 SAR — built)**, **more/diverse training data** (the proven engine), and
+> **Phase 3 (AIS fusion)**.
 
 ---
 
-## Phase 2 — Sentinel-1 SAR (free, complementary modality)
+## Phase 2 — Sentinel-1 SAR (free, complementary modality) — provider ✅ DONE (2026-07-15)
 
 **Goal:** all-weather, day/night, **dark metallic-hull** detection — the wide-area workhorse GFW/Skylight
 use (ESA/Paolo 2024: ~75% of industrial fishing vessels untracked). SAR floor ~15–20 m, so it
 *complements* optical (catches larger/metallic vessels in cloud/night), not replaces it.
 
-**Prerequisites:** P1.1 refactor. **Sentinel-1 GRD IS on Planetary Computer** (`sentinel-1-grd`), so the
+**Status:** the imagery provider is built and wired end to end — `scripts/providers/s1.py`
+(`Sentinel1GrdProvider`), registered as `--provider s1`, default `--collection sentinel-1-grd`,
+`--bands vv,vh`. It drops the cloud query (ranks scenes newest-first), reports `aoi_cloud=None`, and
+converts backscatter → 8-bit **pseudo-RGB** `[VV, VH, VV/VH]` via a **dB percentile** stretch (steps
+1-3 below, done). Verified offline (registry, ABC conformance, dB stretch on synthetic dual/single-pol,
+per-provider default fill); the live path routes correctly through `open_catalog` and is blocked only by
+the local Avast TLS wall (env, not code). **Deliberate deviation from step 3:** used a *percentile*-in-dB
+stretch, not the fixed `[-25,0] dB` window — GRD's stored units (amplitude vs intensity) shift that
+window and a wrong one silently yields black chips; percentile auto-adapts. Swap to a validated fixed
+window once someone eyeballs real chips. **Remaining for Phase 2 = train a separate SAR detector (step
+4) + eyeball-validate real chips.**
+
+**Prerequisites:** P1.1 refactor ✅. **Sentinel-1 GRD IS on Planetary Computer** (`sentinel-1-grd`), so the
 STAC/catalog side is close to a `--collection` change — but the sensor differs fundamentally.
 
-**Steps:**
-1. **Drop the cloud logic:** SAR has no cloud concept — bypass the `eo:cloud_cover` prefilter and the SCL
-   gate (`assess_aoi` already has a graceful no-SCL fallback at ~:270, coverage-only from band nodata).
-2. **Backscatter, not reflectance:** replace `scale_to_uint8`'s reflectance stretch with **dB
-   normalization** of VV/VH backscatter; band model is **VV/VH (2-band)**, not RGB — adjust `read_aoi`
-   band handling and the chip writer.
-3. **Train a separate SAR detector.** Consider transfer from public SAR ship datasets —
-   **xView3-SAR** (arXiv 2206.00897), HRSID, SAR-Ship — rather than the optical base weights.
+**Steps (1-3 ✅ done in `providers/s1.py`; 4 remaining):**
+1. **Drop the cloud logic (it silently breaks search otherwise):** SAR items carry **no** `eo:cloud_cover`
+   property, so the existing `search_candidates` query `{"eo:cloud_cover": {"lt": max_cloud}}`
+   (`sat_fetch.py:209`) returns **zero** items on `sentinel-1-grd` — you must drop that clause for the SAR
+   provider (rank by acquisition date / relative-orbit instead). `assess_aoi` already degrades gracefully
+   with no SCL (`sat_fetch.py:270`, coverage-only from band nodata), so `aoi_cloud` just stays `None` and
+   selection falls back to coverage — that part needs no change.
+2. **Choose GRD vs RTC:** PC has both `sentinel-1-grd` (ground-range detected, **not** terrain-corrected)
+   and `sentinel-1-rtc` (radiometrically terrain-corrected, analysis-ready σ⁰). For ship detection over
+   water, GRD is adequate (water is flat, terrain flattening matters little) and universally available;
+   RTC gives cleaner absolute backscatter if you later add coastal/land context. Pick one behind
+   `--collection`.
+3. **Backscatter, not reflectance:** replace `scale_to_uint8`'s reflectance stretch with **dB
+   normalization** — `10*log10(x)` on the linear-power DN, then clip to roughly **[-25, 0] dB** for VV
+   (ships are bright returns near 0 dB, calm water very dark ≲ -20 dB) and map to 0–255. Sweep the clip
+   window on real chips. Band model is **VV+VH (2-band)**, not RGB, so:
+   - `read_aoi`: request assets `["vv","vh"]`; they're separate single-band COGs like S2's bands, so the
+     existing per-band loop works.
+   - **Chip writer:** `write_chip_geotiff` sets `photometric="RGB"` only when `count==3` — a 2-band chip
+     writes fine as a plain 2-band GeoTIFF, **but the YOLO detector wants 3 channels**. Standard trick:
+     build a **pseudo-RGB [VV, VH, VV/VH-ratio]** (or VV, VH, VV−VH) 3-band chip so the same
+     `detect_boats.py` inference path and the 3-channel model input work unchanged.
+4. **Train a separate SAR detector.** Different modality → its own `best_sar.pt`; **transfer from public
+   SAR ship datasets** — **xView3-SAR** (arXiv 2206.00897, the closest analog: Sentinel-1 dual-pol,
+   maritime, dark-vessel labels), HRSID, or SAR-Ship — rather than the optical base weights, which encode
+   the wrong texture priors. Optionally speckle-filter (Lee/Refined-Lee) before tiling; test whether it
+   helps recall on 1–5 px targets or just erases them.
 
 **Data contract:** same run-dir shape; chips carry CRS+affine so geolocation is unchanged. Detections
-feed the same Phase 3 fusion.
-**Verification:** `--dry-run` `sentinel-1-grd` over an AOI → fetch a VV/VH scene → eyeball → run the SAR
-model; confirm it flags vessels optical missed under cloud/night.
-**Effort: medium-hard** (new normalization + band model + a separate model).
+feed the same Phase 3 fusion. Manifest already records `provider`/`collection`/`bands`, so a SAR run is
+self-describing.
+**Verification:** `--dry-run` `sentinel-1-grd` over an AOI → fetch a VV/VH scene → eyeball the dB-stretched
+pseudo-RGB → run the SAR model; confirm it flags vessels optical missed under cloud/night (fetch S1 and S2
+over the same AOI within a day and compare).
+**Effort: medium-hard** (new normalization + 2→3 band packing + a separate model + its own labels).
 
 ---
 
@@ -149,26 +201,54 @@ so it makes the current model good enough. This is the project's stated purpose.
 in `detections.json` (:122–:123, :206, :229). The fusion layer is greenfield.
 
 **Steps:**
-1. **New `scripts/fuse_violations.py`** — join `detections.json` against per-vessel AIS positions within a
-   spatiotemporal tolerance. Must be **velocity-aware**: the SAR/optical acquisition time and the nearest
-   AIS ping differ, and a moving vessel travels between them — match within a distance that scales with
-   `Δt × plausible_speed`, not a fixed radius. Unmatched in-MPA detections → the **`violation_events`**
-   schema already specified in `CLAUDE.md` (vessel/mpa/times/scores/evidence).
+1. **New `scripts/fuse_violations.py`** — the matcher. Inputs: a run's `detections.json` (each detection
+   already carries `centroid_wgs84 [lon,lat]`, `bbox_wgs84`, `inside_mpa`, `confidence`, `detection_id`,
+   plus a top-level `scene.datetime` — `detect_boats.py:122-123,206,229`) and a set of AIS positions with
+   `(mmsi, lon, lat, timestamp, sog, cog)`. Algorithm, per **in-MPA** detection:
+   - Pull AIS pings within a time window `±ΔT` of `scene.datetime` (e.g. ΔT = 30 min; SAR/optical
+     acquisition rarely coincides with a ping).
+   - **Velocity-aware gate (the crux):** for each candidate ping, the vessel could have moved
+     `reach = sog · |t_detection − t_ping| + slack`. Match if
+     `haversine(detection, ping) ≤ reach` (use the ping's own `sog`; when `sog` is missing/zero, fall back
+     to a `max_speed` cap, e.g. 25 kn). A fixed radius over-flags fast vessels and under-flags during long
+     AIS gaps — scale the radius with Δt, don't hard-code it.
+   - **Matched** → the detection is an *identified* vessel (attach MMSI/identity; still a violation if
+     it's fishing inside a no-take MPA, but not a *dark* one). **Unmatched in-MPA detection → a dark
+     candidate**, the actual product signal. Emit to the **`violation_events`** schema already specified in
+     `CLAUDE.md` (`vessel_id`/`mpa_id`/`entry_time`/`exit_time`/`presence_confidence`/`fishing_probability`/
+     `violation_score`/`evidence:["Sentinel-2", …]`). Write atomically (`.tmp`→`replace`) like every other
+     stage; one `violation_events.json` per run (+ optionally a `.geojson` of dark points for QGIS,
+     mirroring `detections.geojson`).
+   - Reuse the `scene.datetime` + per-chip transforms already in the run dir; `fuse_violations.py` reads
+     the run, it doesn't re-fetch. Keep AIS ingestion in its own module (don't mix streams — house rule).
 2. **AIS source** (pick fastest-to-value first):
    - **Skylight (Ai2)** — a free, ready-made S1+S2+VIIRS **dark-vessel alert feed** that explicitly
      supports MPAs (https://skylight.global/platform). Consume it first for validation / tip-and-cue
-     before building the matcher — fastest path to a working product.
+     before building the matcher — fastest path to a working product, and a ground-truth check for our own
+     dark calls.
    - **GFW Vessels / Insights API** (`/v3/vessels`, `/v3/insights/vessels`) for per-vessel identity + AIS-off
      events. NOTE: current `gfw_fetch.py` only calls the **coarse gridded** `/v3/4wings/report`
-     (group-by `VESSEL_ID`) — that's effort density, **not** per-vessel positions; a new per-vessel call
-     is needed.
-   - Or a raw AIS feed (AISStream / Spire) for position-level tracks.
-3. **Tip-and-cue hook:** this layer is where a confirmed dark alert would trigger **paid sub-meter**
-   imagery (WorldView/SkySat/Pléiades/ICEYE/Capella, ~$12–60/km²) — per-alert only, never blanket
-   (blanketing a 10,000 km² MPA is ~$150k–600k/pass). Attach here, don't build wide-area.
+     (group-by `VESSEL_ID`) — that's effort *density* per cell, **not** per-vessel positions; a **new
+     per-vessel call** is needed (a `gfw_vessels.py` sibling, same token/`.env` pattern, its own data
+     stream). Insights also gives IUU-listing / AIS-gap flags that feed `violation_score`.
+   - Or a **raw AIS feed** for position-level tracks: **AISStream** (free websocket, bbox-filtered, good
+     for a live matcher) or **Spire** (paid, global satellite AIS, better open-ocean coverage where
+     terrestrial AIS is blind — which is exactly where dark vessels hide).
+3. **Confirmation is free and in-scope:** the cheapest check on a dark candidate is **cross-modality** —
+   if S1 (SAR) and S2 (optical) both show a target with no matching AIS, that is a strong dark signal —
+   plus the existing human-review loop. **Paid per-alert sub-meter tasking (commercial VHR/SAR,
+   ~$12–60/km²) is out of scope for this $0-budget project;** were it ever funded it would be per-alert
+   only, never blanket (blanketing a 10,000 km² MPA is ~$150k–600k/pass), and cheap because Phase 3 has
+   already narrowed the AOI to a handful of points. Not built.
 
+**Why this makes the modest detector good enough:** dark-vessel = detection − AIS *inverts the metric*.
+The detector's weakness is false positives at low conf; but a false positive that happens to sit on a
+matching AIS track gets filtered out by the join, and a real dark vessel with no AIS survives. So the
+product cares about *mismatch precision*, which the fusion improves, not the raw *recall* the GSD ceiling
+caps. This is the payoff that justifies Phases 0–2.
 **Verification:** seed one detection known to match an AIS track (must NOT flag) and one known dark
-(must flag); validate against Skylight's feed for the same AOI/time.
+(must flag); check the velocity gate with a fast-mover whose ping is 20 min off-acquisition (must still
+match); validate the dark calls against Skylight's feed for the same AOI/time.
 **Effort: medium-hard (greenfield).**
 
 ---
@@ -182,11 +262,13 @@ in `detections.json` (:122–:123, :206, :229). The fusion layer is greenfield.
 | Re-apply scene holdout after `build_dataset.py` | snippet in `docs/STATUS.md` (Operational recipes) |
 | Promote | `cp <run>/weights/best.pt data/training/weights/best.pt` (back up first) |
 | Detector deploy defaults | `detect_boats.py`: imgsz 1024, conf 0.20, weights → in-repo `best.pt` |
-| Imagery seams to reuse | `sat_fetch.py`: `open_catalog`/`search_candidates`/`assess_aoi`/`select_scene`/`read_aoi`/`scale_to_uint8` |
-| Refactor prerequisite | wrap `sat_fetch.py` :409-end in `main()` (AUDIT.md #1) |
+| Add an imagery source | subclass `Provider` (`scripts/providers/base.py`), `register()` it (`providers/__init__.py`); copy `providers/pc.py` (optical) or `providers/s1.py` (SAR) |
+| Select a source | `sat_fetch.py --provider {pc,s1}` (default `pc`; `SAT_PROVIDER` env). `pc`=S2 optical, `s1`=S1 SAR — both free, no credentials |
+| Fetch a SAR scene | `sat_fetch.py --provider s1 --bbox … --dry-run` then without `--dry-run` (free, all-weather; needs its own `best_sar.pt`) |
+| Refactor prerequisite ✅ | `main()`-guard + provider dispatch both done (AUDIT.md #1 / Phase 1 step 1) |
 | Violation schema | `CLAUDE.md` → "Output Schema" / `violation_events` |
 
 ## Key sources
 Small-object: SAHI 2202.06934, copy-paste 1902.07296, NWD 2110.13389, P2/SOD-YOLOv8 2408.04786.
-Imagery: Kanjir survey (PMC5877374), S2-YOLO RSE 2025, Planet E&R. Dark vessels: ESA/GFW (75% untracked),
+Imagery: Kanjir survey (PMC5877374), S2-YOLO RSE 2025. Dark vessels: ESA/GFW (75% untracked),
 Skylight (skylight.global/platform), xView3-SAR 2206.00897.

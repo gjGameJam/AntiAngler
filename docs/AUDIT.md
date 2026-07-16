@@ -8,15 +8,16 @@ and documented; no hardcoded credentials).
 ## P1 — High (blocks planned stage 2–3 work, or risks the downstream data)
 
 1. **No `main()` / `if __name__ == "__main__"` guard — orchestration runs at module import.**
-   All four scripts execute their orchestration at top level (`sat_fetch.py:404+`,
-   `gfw_fetch.py:57-111`, `prep_polygons.py:22-58`, `view_polygons.py:22-43`). `docs/PIPELINE.md`
-   plans `scan_mpas.py` and `detect_boats.py` to **import** `sat_fetch`'s functions
-   (`search_candidates`, `select_scene`, `read_aoi`) — but importing the module calls `parse_args()`
-   against the *importer's* argv and runs a full fetch, so reuse is impossible and unit tests can't
-   load the helpers.
-   **Fix:** wrap the bottom-of-file orchestration in `def main(): ...` + `if __name__ == "__main__":
-   main()`, leaving the helper functions importable. Highest-leverage change for stages 2–3. *(This
-   is the one antipattern that actively blocks the roadmap; do it before writing `detect_boats.py`.)*
+   ~~All four scripts execute their orchestration at top level.~~ **`sat_fetch.py` FIXED (2026-07-15):**
+   its orchestration (was `:409-529`) is wrapped in `def main(argv=None):` under
+   `if __name__ == "__main__": raise SystemExit(main())`, and `parse_args(argv=None)` takes an explicit
+   argv. Importing `sat_fetch` no longer runs `parse_args()` or a fetch; the seam helpers
+   (`open_catalog`/`search_candidates`/`assess_aoi`/`select_scene`/`read_aoi`/`scale_to_uint8` + the
+   tiling/IO helpers) are now importable and unit-testable. See `docs/ROADMAP.md` "Cross-cutting
+   prerequisite" for the reusable-seam table.
+   **Still to do (same fix, other scripts):** `gfw_fetch.py:57-111`, `prep_polygons.py:22-58`,
+   `view_polygons.py:22-43` still run at top level — apply the same `main()` guard when each is next
+   touched (lower priority; none are imported by another module today).
 
 2. **`prep_polygons.py` is fragile and off-house-style, and it writes the file everything else
    depends on.** `prep_polygons.py:16-58`:

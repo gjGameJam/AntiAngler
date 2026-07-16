@@ -18,7 +18,7 @@ loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatte
 - **Small-vessel retrain (promoted 2026-07-14, LIVE) — cross-TYPE gap closed.** The open-ocean model was all big anchored ships; small fishing vessels were untested. Measured the honest cross-type baseline on a clean **Alonnisos** (Aegean) holdout — the openocean model scored **recall 0.31 / precision 0.25 @ conf 0.15** (a real capability gap, *not* the GSD ceiling: conf 0.05 recovered recall to 0.63 → the model saw the boats but under-scored them). Fix: fetched + human-reviewed two MPA-adjacent Mediterranean scenes (**Cyclades 219** + **Egadi 223** boat boxes) through the in-repo loop, folded into TRAIN (Alonnisos + Singapore + Port Said held out), retrained the P2 arch (warm-started from openocean, batch 4, 30 ep / 6.8 h). On the Alonnisos holdout (never trained on): **recall 0.31 → 0.67** @ conf 0.15 (TP 15→33, FN 34→16), **precision held at 0.25**, recall 90% CIs cleanly separated ([0.19,0.45] vs [0.54,0.80]). The lift is concentrated on the >5px boats (15/48 → 32/48). **No forgetting:** base-test mAP50 0.629→0.626, base R 0.568→0.556 (noise). Cost: false positives roughly doubled (FP/chip 0.70→1.55) — but `conf_sweep.py` confirms **conf 0.15 is F1-optimal** (F1 0.365, peak) and the new model **Pareto-dominates** the old (at equal precision 2.2× the recall; at equal recall, better precision), so no operating-point or deploy-conf change. **Caveats:** one 49-box scene; precision is inherently low at 10 m GSD → this is a candidate-generation feed for HITL review, where recall is the metric that matters. **Cross-region AND cross-type now both demonstrated. Next: more diverse scenes (small artisanal boats, other regions) + the AIS-fusion reframe.**
 - **The key finding — inference resolution is the dominant lever, not the retrain.** Just running the *existing* model at `imgsz 1024` (no training) lifted holdout recall **0.31 → 0.73** (1–5 px vessels → 2–10 px stop being sub-cell). The 5-h retrain at 1024 then bought a *cleaner frontier*: at matched recall (0.73) it has **~45% fewer false positives** than the raw-upscaled old model (FP/chip 1.5 vs 2.75). A conf sweep (`scripts/conf_sweep.py`) put the operating point at 0.20 (F1 near-peak; recall-vs-conf is steep, FP-vs-conf shallow).
 - **Earlier win (augmentation, superseded as live):** `scripts/augment_positives.py` water-gated copy-paste fixed the 11-vs-58 boat/empty imbalance → 113 boat chips / 722 boxes; that model is now the `_640` backup.
-- **Next levers:** (1) **scale the open-ocean data loop** — more diverse scenes, especially *small fishing vessels* (cross-type generalization is still unproven); (2) PlanetScope 3 m (Phase 1) for the physical GSD ceiling; (3) the AIS dark-vessel reframe (Phase 3, the operational payoff). The P2 head + real open-ocean data closed the biggest detector gaps; remaining gains are more/diverse data + better imagery. See `docs/ROADMAP.md`.
+- **Next levers:** (1) **scale the open-ocean data loop** — more diverse scenes, especially *small fishing vessels* (cross-type generalization is still unproven); (2) **Sentinel-1 SAR** (Phase 2 — provider now built; train its own `best_sar.pt`) for free all-weather / dark-vessel coverage; (3) the AIS dark-vessel reframe (Phase 3, the operational payoff). The P2 head + real open-ocean data closed the biggest detector gaps; remaining gains are more/diverse data + the SAR and AIS phases (no free global higher-res optical exists, so 10 m is the optical floor). See `docs/ROADMAP.md`.
 
 ---
 
@@ -105,7 +105,7 @@ recall on small fishing vessels (Alonnisos 0.31) → fixed by real small-vessel 
 (`finetune-smallvessel`, LIVE at conf 0.15, Alonnisos 0.31→0.67). **The active-learning data loop is the
 proven engine** and has now closed the two biggest generalization gaps end-to-end.
 `build_dataset.py --holdout-scene` is implemented (reproducible scene-aware split). **The full forward
-plan — Phases 1–3 (PlanetScope 3 m, Sentinel-1 SAR, AIS dark-vessel fusion) — is in `docs/ROADMAP.md`.**
+plan — Sentinel-1 SAR (Phase 2, provider built) and AIS dark-vessel fusion (Phase 3) — is in `docs/ROADMAP.md`.**
 Short version, in impact order:
 1. **Keep scaling the data loop — still highest leverage.** Cross-region and cross-type are now both
    demonstrated on single scenes each; the remaining diversity gaps are **small artisanal/pleasure boats**
@@ -115,7 +115,7 @@ Short version, in impact order:
    retrain. Keep at least one fresh scene as a rotating holdout. Watch the FP/chip trend — the
    smallvessel model doubled it (0.70→1.55); if it keeps climbing, add reviewed empty-water hard
    negatives from the *same* regions to rein in precision without costing recall.
-2. **Phase 1 (PlanetScope 3 m)** for the physical GSD ceiling, or **Phase 3 (AIS dark-vessel reframe)** —
+2. **Phase 2 (Sentinel-1 SAR — provider built; train `best_sar.pt` next)** for free all-weather / dark-vessel coverage, or **Phase 3 (AIS dark-vessel reframe)** —
    see the roadmap. Phase 3 is the operational payoff and makes even a modest-recall detector "good
    enough" by filtering the detector's false positives against AIS.
 
