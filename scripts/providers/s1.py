@@ -44,7 +44,11 @@ class Sentinel1GrdProvider(Provider):
     key = "s1"
     display_name = "Planetary Computer Sentinel-1 GRD (SAR)"
     manifest_tag = "planetary-computer-s1"
-    default_collection = "sentinel-1-grd"  # ground-range detected; --collection sentinel-1-rtc for terrain-corrected
+    # RTC (radiometrically terrain-corrected) is the default: its assets carry a real UTM CRS + 10 m
+    # affine, so the S2 bbox-windowed-read/tile/geolocate path works unchanged. Raw GRD is in radar
+    # ground-range geometry (crs=None, geolocation only via GCPs) and would need a warp/RPC reader —
+    # pass --collection sentinel-1-grd only once that reader exists. RTC is also cleaner absolute σ⁰.
+    default_collection = "sentinel-1-rtc"
     default_bands = "vv,vh"                 # polarizations, not RGB bands; IW coastal = vv,vh (EW open-ocean = hh,hv)
     default_resolution = 10.0
     default_stretch_max = 0.0              # unused: SAR uses a dB *percentile* stretch (see scale_to_uint8)
@@ -69,7 +73,7 @@ class Sentinel1GrdProvider(Provider):
         items = list(search.items())
         if not items:
             raise RuntimeError(f"No {collection} scenes for bbox={bbox} datetime={dt}. Widen --start/--end, "
-                               "or try --collection sentinel-1-rtc. Check the AOI has Sentinel-1 coverage "
+                               "or try --collection sentinel-1-grd. Check the AOI has Sentinel-1 coverage "
                                "and that lon/lat order is correct.")
         # Newest-first: for patrol the most recent look at the AOI is the one we want. AOI coverage
         # (and, for optical, clarity) is assessed per-candidate later by select_scene.

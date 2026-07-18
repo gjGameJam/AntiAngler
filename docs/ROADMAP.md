@@ -130,23 +130,39 @@ chips and it doesn't address the sub-cell problem — try only if P2 plateaus.
 
 ---
 
-## Phase 2 — Sentinel-1 SAR (free, complementary modality) — provider ✅ DONE (2026-07-15)
+## Phase 2 — Sentinel-1 SAR (free, complementary modality) — provider ✅ + real-chip validation ✅ (2026-07-15)
 
 **Goal:** all-weather, day/night, **dark metallic-hull** detection — the wide-area workhorse GFW/Skylight
 use (ESA/Paolo 2024: ~75% of industrial fishing vessels untracked). SAR floor ~15–20 m, so it
 *complements* optical (catches larger/metallic vessels in cloud/night), not replaces it.
 
-**Status:** the imagery provider is built and wired end to end — `scripts/providers/s1.py`
-(`Sentinel1GrdProvider`), registered as `--provider s1`, default `--collection sentinel-1-grd`,
-`--bands vv,vh`. It drops the cloud query (ranks scenes newest-first), reports `aoi_cloud=None`, and
-converts backscatter → 8-bit **pseudo-RGB** `[VV, VH, VV/VH]` via a **dB percentile** stretch (steps
-1-3 below, done). Verified offline (registry, ABC conformance, dB stretch on synthetic dual/single-pol,
-per-provider default fill); the live path routes correctly through `open_catalog` and is blocked only by
-the local Avast TLS wall (env, not code). **Deliberate deviation from step 3:** used a *percentile*-in-dB
-stretch, not the fixed `[-25,0] dB` window — GRD's stored units (amplitude vs intensity) shift that
-window and a wrong one silently yields black chips; percentile auto-adapts. Swap to a validated fixed
-window once someone eyeballs real chips. **Remaining for Phase 2 = train a separate SAR detector (step
-4) + eyeball-validate real chips.**
+**Status:** the imagery provider is built, wired end to end, AND now **validated on real chips**
+(2026-07-15, Fujairah anchorage) — `scripts/providers/s1.py`, registered as `--provider s1`, default
+`--collection sentinel-1-rtc`, `--bands vv,vh`. It drops the cloud query (ranks scenes newest-first),
+reports `aoi_cloud=None`, and converts backscatter → 8-bit **pseudo-RGB** `[VV, VH, VV/VH]` via a **dB
+percentile** stretch. A real S1 fetch over the *same AOI* as the existing Fujairah S2 scene (dates ~1
+week apart) confirms the pipeline end to end: **bright backscatter blobs coincide with the
+optically-detected vessels**, and SAR even shows vessels the optical detector missed (side-by-side in the
+SAR run dir's `comparison_overview.png` / `comparison_detail.png`).
+
+**Two fixes were required to get a real read to succeed (both done):**
+1. **`.tiff` extension allowlist** — `_raster.py`'s `/vsicurl` `CPL_VSIL_CURL_ALLOWED_EXTENSIONS` was
+   `.tif,.TIF` only, but S1 measurement assets are `.tiff`, so GDAL short-circuited and reported the
+   asset "does not exist" before any fetch. Now `.tif,.TIF,.tiff,.TIFF` (additive; S2 unaffected).
+2. **Default collection GRD → RTC** — raw `sentinel-1-grd` is in radar ground-range geometry
+   (`crs=None`, geolocation only via 189 GCPs, identity transform) and is **incompatible** with the S2
+   bbox→UTM windowed-read/tile path (`transform_bounds(..., crs=None)` crashes). `sentinel-1-rtc`
+   (radiometrically terrain-corrected) is on a **real UTM grid** (EPSG:326xx, clean 10 m affine, no
+   GCPs) — drop-in with the existing machinery and radiometrically cleaner σ⁰. This corrects the earlier
+   "GRD is adequate" call in step 2 below. Pass `--collection sentinel-1-grd` only once a GCP/warp reader
+   exists.
+
+TLS: the Avast MITM is handled by the certifi+Avast CA bundle + `--insecure-tls` recipe, same as S2.
+**Caveat:** the validated RTC scene covered only ~82% of the AOI (a no-data swath wedge on the east
+edge — detections there have no SAR data); for full coverage pick an orbit/date that fully covers the AOI
+or mosaic adjacent scenes. **Deliberate deviation from step 3:** kept a *percentile*-in-dB stretch, not a
+fixed `[-25,0] dB` window — it auto-adapts and the real chips look correct, so keep it unless a fixed
+window proves better on more scenes. **Remaining for Phase 2 = train a separate SAR detector (step 4).**
 
 **Prerequisites:** P1.1 refactor ✅. **Sentinel-1 GRD IS on Planetary Computer** (`sentinel-1-grd`), so the
 STAC/catalog side is close to a `--collection` change — but the sensor differs fundamentally.
@@ -158,11 +174,13 @@ STAC/catalog side is close to a `--collection` change — but the sensor differs
    provider (rank by acquisition date / relative-orbit instead). `assess_aoi` already degrades gracefully
    with no SCL (`sat_fetch.py:270`, coverage-only from band nodata), so `aoi_cloud` just stays `None` and
    selection falls back to coverage — that part needs no change.
-2. **Choose GRD vs RTC:** PC has both `sentinel-1-grd` (ground-range detected, **not** terrain-corrected)
-   and `sentinel-1-rtc` (radiometrically terrain-corrected, analysis-ready σ⁰). For ship detection over
-   water, GRD is adequate (water is flat, terrain flattening matters little) and universally available;
-   RTC gives cleaner absolute backscatter if you later add coastal/land context. Pick one behind
-   `--collection`.
+2. **Choose GRD vs RTC — RESOLVED: use RTC (now the default).** PC has both `sentinel-1-grd`
+   (ground-range detected) and `sentinel-1-rtc` (radiometrically terrain-corrected, analysis-ready σ⁰).
+   The original note here favored GRD ("water is flat"), but that missed that **PC's GRD assets carry no
+   CRS** — they're in radar geometry with GCPs (`crs=None`, identity transform), so the S2-style
+   `transform_bounds`+`from_bounds` windowed read breaks. **RTC is on a real UTM grid (EPSG:326xx, 10 m
+   affine)** and is drop-in with the existing reader, so the provider defaults to it. Use GRD only after
+   adding a GCP/warp-based reader.
 3. **Backscatter, not reflectance:** replace `scale_to_uint8`'s reflectance stretch with **dB
    normalization** — `10*log10(x)` on the linear-power DN, then clip to roughly **[-25, 0] dB** for VV
    (ships are bright returns near 0 dB, calm water very dark ≲ -20 dB) and map to 0–255. Sweep the clip

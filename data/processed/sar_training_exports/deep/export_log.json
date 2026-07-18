@@ -1,0 +1,40 @@
+{
+  "exports": [
+    {
+      "generated_utc": "2026-07-18T03:05:49Z",
+      "source_run": "2026-07-17T20-56-26Z_s1deep-fujairah",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 42,
+      "positive_chips": 21,
+      "negative_chips": 21,
+      "total_boxes": 182
+    },
+    {
+      "generated_utc": "2026-07-18T03:05:52Z",
+      "source_run": "2026-07-17T20-57-46Z_s1deep-gibraltar",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 35,
+      "positive_chips": 15,
+      "negative_chips": 20,
+      "total_boxes": 23
+    },
+    {
+      "generated_utc": "2026-07-18T03:05:59Z",
+      "source_run": "2026-07-17T20-59-34Z_s1deep-hormuz",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 72,
+      "positive_chips": 1,
+      "negative_chips": 71,
+      "total_boxes": 1
+    }
+  ]
+}

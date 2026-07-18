@@ -110,7 +110,7 @@ def api_state(_=Depends(require_token)):
             "reviewed": bool(saved and saved.get("reviewed")),
         })
     return {"run_dir": STATE["run_dir"].name, "tile_size": STATE["manifest"].get("tile_size", 640),
-            "wdpa": STATE["manifest"].get("wdpa"), "chips": chips}
+            "wdpa": STATE["manifest"].get("wdpa"), "has_companion": STATE["has_companion"], "chips": chips}
 
 
 @app.get("/chip/{chip_id}.png")
@@ -123,6 +123,18 @@ def chip_png(chip_id: int, _=Depends(require_token)):
         raise HTTPException(status_code=404, detail="chip not found")
     return Response(geotiff_to_png(path), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
+
+
+@app.get("/companion/{chip_id}.png")
+def companion_png(chip_id: int, _=Depends(require_token)):
+    """Co-registered optical image for a SAR chip (land reference); 404 if none was generated."""
+    rec = STATE["chip_by_id"].get(chip_id)
+    if not rec:
+        raise HTTPException(status_code=404, detail="unknown chip")
+    path = (STATE["run_dir"] / "companion" / f"{Path(rec['filename']).stem}.png").resolve()
+    if not path.is_relative_to(STATE["run_dir"]) or not path.is_file():
+        raise HTTPException(status_code=404, detail="no companion")
+    return Response(path.read_bytes(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/review/{chip_id}")
@@ -168,8 +180,12 @@ HTML_TEMPLATE = r"""<!doctype html>
   .bar { height: 6px; background: #2c313b; border-radius: 3px; width: 220px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: #3fb950; width: 0%; }
   main { display: flex; gap: 14px; padding: 14px; align-items: flex-start; }
-  #wrap { position: relative; line-height: 0; }
-  canvas { max-width: min(88vw, 88vh); border: 1px solid #2c313b; cursor: crosshair; touch-action: none; }
+  #wrap { display: flex; gap: 10px; }
+  .pane { margin: 0; }
+  .pane figcaption { font-size: 12px; color: #93a1b0; line-height: 1.3; margin-bottom: 5px; max-width: 640px; min-height: 1.3em; }
+  canvas { max-width: min(88vw, 88vh); border: 1px solid #2c313b; cursor: crosshair; touch-action: none; display: block; }
+  #wrap.dual canvas { max-width: min(43vw, 80vh); }
+  #cvc { cursor: default; }
   aside { width: 300px; }
   .card { background: #1c2027; border: 1px solid #2c313b; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
   button { font: inherit; padding: 7px 11px; border-radius: 6px; border: 1px solid #3a414d;
@@ -195,7 +211,10 @@ HTML_TEMPLATE = r"""<!doctype html>
   <span id="cnt" class="muted"></span>
 </header>
 <main>
-  <div id="wrap"><canvas id="cv" width="640" height="640"></canvas></div>
+  <div id="wrap">
+    <figure class="pane"><figcaption id="lblMain">chip</figcaption><canvas id="cv" width="640" height="640"></canvas></figure>
+    <figure class="pane" id="compPane" hidden><figcaption>optical &mdash; land reference (drawn from the paired S2 scene; ships differ by date, land does not)</figcaption><canvas id="cvc" width="640" height="640"></canvas></figure>
+  </div>
   <aside>
     <div class="card">
       <div class="row">
@@ -232,10 +251,12 @@ HTML_TEMPLATE = r"""<!doctype html>
 <script nonce="__NONCE__">
 const TOKEN = "__TOKEN__";
 const H = { "X-Auth-Token": TOKEN };
-let chips = [], idx = 0, tileSize = 640, boxes = [], img = new Image();
+let chips = [], idx = 0, tileSize = 640, boxes = [], img = new Image(), imgC = new Image();
 let drag = null;  // {x0,y0,x1,y1} while dragging a new box
+let hasComp = false;
 
 const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const cvc = document.getElementById("cvc"), ctxc = cvc.getContext("2d");
 const COLOR = { pending:"#e3b341", correct:"#3fb950", incorrect:"#f85149", missed:"#58a6ff" };
 
 async function api(path, opts) {
@@ -248,6 +269,13 @@ async function boot() {
   const s = await api("/api/state");
   chips = s.chips; tileSize = s.tile_size || 640;
   cv.width = tileSize; cv.height = tileSize;
+  cvc.width = tileSize; cvc.height = tileSize;
+  hasComp = !!s.has_companion;
+  if (hasComp) {
+    document.getElementById("compPane").hidden = false;
+    document.getElementById("wrap").classList.add("dual");
+    document.getElementById("lblMain").textContent = "SAR (VV / VH) — label on this side";
+  }
   document.getElementById("runName").textContent = s.run_dir + (s.wdpa ? "  •  " + s.wdpa.NAME : "");
   loadChip(0);
   refreshProgress();
@@ -267,25 +295,35 @@ function loadChip(i) {
   img = new Image();
   img.onload = draw;
   img.src = "/chip/" + c.id + ".png?token=" + encodeURIComponent(TOKEN);
+  if (hasComp) {
+    imgC = new Image();
+    imgC.onload = draw; imgC.onerror = draw;  // missing companion -> boxes on a blank pane
+    imgC.src = "/companion/" + c.id + ".png?token=" + encodeURIComponent(TOKEN);
+  }
   document.getElementById("pos").textContent = "chip " + (idx + 1) + " / " + chips.length;
   document.getElementById("status").textContent = c.reviewed ? "already reviewed" : "";
   draw();
 }
 
-function draw() {
-  ctx.clearRect(0, 0, cv.width, cv.height);
-  if (img.complete && img.naturalWidth) ctx.drawImage(img, 0, 0, cv.width, cv.height);
-  ctx.lineWidth = 2; ctx.font = "12px system-ui";
+function drawPane(c2, image) {
+  c2.clearRect(0, 0, tileSize, tileSize);
+  if (image && image.complete && image.naturalWidth) c2.drawImage(image, 0, 0, tileSize, tileSize);
+  c2.lineWidth = 2; c2.font = "12px system-ui";
   for (const b of boxes) {
     const [x1, y1, x2, y2] = b.bbox_pixel;
-    ctx.strokeStyle = COLOR[b.verdict] || "#e3b341";
-    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    c2.strokeStyle = COLOR[b.verdict] || "#e3b341";
+    c2.strokeRect(x1, y1, x2 - x1, y2 - y1);
   }
+}
+
+function draw() {
+  drawPane(ctx, img);
   if (drag) {
     ctx.strokeStyle = COLOR.missed; ctx.setLineDash([5, 4]);
     ctx.strokeRect(drag.x0, drag.y0, drag.x1 - drag.x0, drag.y1 - drag.y0);
     ctx.setLineDash([]);
   }
+  if (hasComp) drawPane(ctxc, imgC);
 }
 
 function toCanvas(e) {
@@ -426,6 +464,7 @@ def main():
         run_dir=run_dir, manifest=manifest, chips=chips,
         chip_by_id={c["id"]: c for c in chips},
         detections_by_chip=detections_by_chip,
+        has_companion=(run_dir / "companion").is_dir(),
         reviewer=args.reviewer,
         token=secrets.token_urlsafe(24),
         allowed_hosts={f"{args.host}:{args.port}", f"127.0.0.1:{args.port}", f"localhost:{args.port}"},

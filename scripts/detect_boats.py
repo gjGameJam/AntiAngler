@@ -61,10 +61,19 @@ def parse_args():
     p.add_argument("--imgsz", type=int, default=int(env_or("DET_IMGSZ", 1024)),
                    help="Model inference size. Default 1024: the promoted model is trained at 1024, and "
                         "upscaling the 640 chips (1-5 px vessels -> 2-10 px) is the dominant recall lever.")
+    p.add_argument("--augment", action="store_true", default=truthy(env_or("DET_AUGMENT", "")),
+                   help="Test-time augmentation (multi-scale + flips). BIG-SHIP AOIs ONLY: with --imgsz 1280 "
+                        "it lifts large-ship recall (Port Said 0.69->0.81) at unchanged precision/FP. Do NOT use "
+                        "on small-vessel/cluttered scenes - it amplifies water-texture false alarms (Alonnisos "
+                        "precision 0.40->0.34, Singapore FP/chip 2.5->5.75). ~4x slower. See docs/STATUS.md.")
     p.add_argument("--merge-dist", type=float, default=float(env_or("DET_MERGE_DIST", 30.0)),
                    help="Merge detections whose centroids are within this many METRES (cross-chip dedup).")
     p.add_argument("--inside-mpa-only", action="store_true", default=truthy(env_or("DET_INSIDE_MPA_ONLY", "")),
                    help="Drop detections whose centroid falls outside the MPA polygon (WDPA runs only).")
+    p.add_argument("--water-only", action="store_true", default=truthy(env_or("DET_WATER_ONLY", "")),
+                   help="Drop detections on land (coast/rocks/islets) using the run's cached water_mask.tif "
+                        "(build it with scripts/water_mask.py). Improvement plan O1 — kills the confident "
+                        "rock/islet false positives at ~0 recall cost. On-water FPs need hard negatives, not this.")
     p.add_argument("--gpkg", type=Path, default=Path(env_or("DET_GPKG", str(DEFAULT_GPKG))),
                    help="MPA GeoPackage for the point-in-polygon test.")
     p.add_argument("--class-name", default=env_or("DET_CLASS_NAME", "boat"),
@@ -89,7 +98,7 @@ def load_model(weights, class_name):
     return YOLO(str(weights))
 
 
-def detect_chip(model, chip_path, conf, imgsz, device):
+def detect_chip(model, chip_path, conf, imgsz, device, augment=False):
     """Run the detector on one chip. Returns (list of {conf, bbox_pixel, _utm, centroid_wgs84,
     bbox_wgs84}, ok) where _utm is the centroid in the chip's UTM CRS (for metric dedup)."""
     from PIL import Image  # Ultralytics reads a PIL image as RGB (a numpy array would be read as BGR)
@@ -99,7 +108,7 @@ def detect_chip(model, chip_path, conf, imgsz, device):
         transform, crs = src.transform, src.crs
 
     res = model.predict(Image.fromarray(rgb, "RGB"), imgsz=imgsz, conf=conf,
-                        device=device, verbose=False)[0]
+                        augment=augment, device=device, verbose=False)[0]
     boxes = res.boxes.xyxy.cpu().numpy() if res.boxes is not None else np.empty((0, 4))
     confs = res.boxes.conf.cpu().numpy() if res.boxes is not None else np.empty((0,))
     if len(boxes) == 0:
@@ -164,7 +173,8 @@ def build_geojson(detections):
             {"type": "Feature",
              "geometry": {"type": "Point", "coordinates": d["centroid_wgs84"]},
              "properties": {"detection_id": d["detection_id"], "chip": d["chip"],
-                            "confidence": d["confidence"], "inside_mpa": d["inside_mpa"]}}
+                            "confidence": d["confidence"], "inside_mpa": d["inside_mpa"],
+                            "on_water": d.get("on_water")}}
             for d in detections
         ],
     }
@@ -180,14 +190,15 @@ def main():
     print("DETECT:")
     print(f"  run={run_dir}")
     print(f"  weights={args.weights}")
-    print(f"  conf={args.conf}  imgsz={args.imgsz}  merge-dist={args.merge_dist}m")
+    print(f"  conf={args.conf}  imgsz={args.imgsz}  augment={args.augment}  merge-dist={args.merge_dist}m")
     print(f"  chips={len(manifest['chips'])}  scene_crs={manifest['scene_crs']}")
 
     model = load_model(args.weights, args.class_name)
 
     all_dets = []
     for chip in manifest["chips"]:
-        chip_dets = detect_chip(model, run_dir / chip["filename"], args.conf, args.imgsz, args.device)
+        chip_dets = detect_chip(model, run_dir / chip["filename"], args.conf, args.imgsz,
+                                args.device, augment=args.augment)
         for d in chip_dets:
             d["chip"] = chip["filename"]
             d["class"] = args.class_name
@@ -213,6 +224,29 @@ def main():
     else:
         for d in deduped:
             d["inside_mpa"] = None
+
+    # Water/land mask (improvement plan O1). The cached water_mask.tif (scripts/water_mask.py,
+    # ESA WorldCover 10 m) marks each detection on_water; --water-only drops land ones — the
+    # confident coast/rock/islet FP class. NOTE: Step 0 (2026-07-16) found land is only ~16% of
+    # FPs; the dominant ~84% are ON-WATER false alarms (empty-water/swell/shallows on small-vessel
+    # scenes) which this filter does NOT touch — those need same-region hard negatives (O3).
+    mask_path = run_dir / "water_mask.tif"
+    if mask_path.exists():
+        from water_mask import WaterSampler
+        sampler = WaterSampler(mask_path)
+        for d in deduped:
+            lon, lat = d["centroid_wgs84"]
+            d["on_water"] = sampler.is_water(lon, lat)
+        if args.water_only:
+            before = len(deduped)
+            deduped = [d for d in deduped if d["on_water"]]
+            print(f"  water-only filter: {len(deduped)}/{before} kept (dropped {before - len(deduped)} on land)")
+    else:
+        for d in deduped:
+            d["on_water"] = None
+        if args.water_only:
+            print(f"  water-only requested but no water_mask.tif in {run_dir.name} "
+                  f"(build it: python scripts/water_mask.py --run {run_dir}) — skipping filter")
 
     deduped.sort(key=lambda d: d["confidence"], reverse=True)
     for i, d in enumerate(deduped):

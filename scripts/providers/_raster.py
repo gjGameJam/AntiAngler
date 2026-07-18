@@ -15,8 +15,10 @@ def gdal_env(insecure_tls):
     """GDAL config for /vsicurl COG reads. ``insecure_tls`` disables cert verification —
     opt-in, only for a TLS-intercepting proxy/AV whose re-signed chain GDAL's schannel
     backend rejects (the STAC/signing HTTPS still verifies via the normal trust store)."""
+    # Sentinel-2 COGs are .tif; Sentinel-1 (GRD/RTC) measurement assets are .tiff. Both must be
+    # allowed or /vsicurl short-circuits and reports the asset as non-existent before any fetch.
     opts = dict(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
-                CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".tif,.TIF")
+                CPL_VSIL_CURL_ALLOWED_EXTENSIONS=".tif,.TIF,.tiff,.TIFF")
     if insecure_tls:
         opts["GDAL_HTTP_UNSAFESSL"] = "YES"  # opt-in; TLS-intercepting proxy/AV only
     return opts
