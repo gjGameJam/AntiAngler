@@ -63,7 +63,7 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
 | # | Lever | Attacks | Effort | Expected |
 |---|---|---|---|---|
 | O1 | Water/land mask at inference ✅ **DONE** | precision | low | ships; removes the ~16% land FP class (incl. confident rocks/islets) |
-| O2 | NIR / NDWI (mask now, 4-ch model later) | precision (+recall) | med→high | crisper water separation; better features |
+| O2 | NIR / NDWI (mask now, 4-ch model later) | precision (+recall) | med→high | (a) NDWI filter BUILT but a **calibrated non-win** on small-vessel FPs (glint≠blank water); (b) 4-ch model deferred |
 | O3 | Same-region hard negatives (glint/coast/cloud) | precision | med | fewer FPs; **watch recall** |
 | O4 | More diverse real positives (proven engine) | recall | med (ongoing) | the durable recall lever |
 | O5 | Inference/tiling tuning | recall | low | small, diminishing |
@@ -89,6 +89,24 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
   input channel and retrain (touches provider band packing, `detect_boats` input, and augmentation).
 - **Recommend:** do (a) first (feeds O1); defer (b) until O1/O3/O4 plateau.
 
+- **⚠️ (a) BUILT + CALIBRATED — validated NON-WIN for small-vessel precision (2026-07-18).** Shipped
+  `scripts/ndwi_mask.py` (re-reads the run's scene B03/B08 through the `pc` provider seam, caches a
+  pixel-aligned float `ndwi.tif`) + `detect_boats.py --open-water`/`--ndwi-thresh` (drops a detection only
+  if its whole box is water, min NDWI ≥ thresh; also stamps a `min_ndwi` diagnostic on every detection).
+  End-to-end verified (synthetic sampler test + real fetch on Santos & Alonnisos under the Avast bundle).
+  **But the core premise — "on-water FPs sit on blank water, real boats don't" — is FALSE on the
+  small-vessel scene it targets.** Calibrated on the Alonnisos holdout (63 TP / 20 FP, human verdicts):
+  the FPs sit on **glint/foam/swell/reef-edge features that reflect NIR *more strongly* than the 1–5 px
+  real boats** (FP min-NDWI median **−0.122** vs TP **−0.027**), so the distributions overlap the wrong
+  way — no threshold drops FPs without gutting recall (at −0.10: 7/20 FP dropped but **60/63 TP** dropped,
+  precision 0.76→0.19; at ≥+0.05: ~0 FP dropped). **Kept opt-in and OFF by default** (correct, tested, and
+  `min_ndwi` is a useful diagnostic), but small-vessel precision stays with **O3 (same-region hard
+  negatives)** and **O7 (AIS fusion)**, exactly as Step 0 concluded. May still help big-ship/anchorage
+  scenes (genuine blank-water FPs), but those are already ~P0.97 so the ceiling is small. Lesson: NDWI is a
+  spectral *water* index, and these FPs are real spectral water *features*, not blank water — so a water
+  index cannot reject them. The 4-channel model (b) would have to *learn* the object-vs-glint texture
+  difference; a single NDWI threshold cannot.
+
 ### O3 — Same-region hard negatives
 - **Why:** the small-vessel retrain doubled FP/chip (0.70→1.55, STATUS). The fix is reviewed
   empty-water / coast / cloud / glint chips **from the same regions**, exported as hard negatives
@@ -98,6 +116,15 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
 - **How:** fetch empty-water/coastal/thin-cloud chips near deployment regions → `review_server.py` →
   `export_labels.py` (empty labels) → `build_dataset.py` → `train.py`. **Verify:** precision ↑, recall
   held on all holdouts.
+- **Safeguard BUILT (2026-07-18): `build_dataset.py --max-neg-ratio R`.** Caps AL hard-negative
+  (empty-label) chips in the **TRAIN** split to `R × (AL positives in train)`, seeded-subsampling the
+  excess (val/holdout negatives are never capped — they only measure precision). `build_dataset.py` now
+  also **always reports the pos/neg balance per split** and records it in `active_learning_manifest.json`,
+  so negative flooding is visible. Note (measured 2026-07-18): with the Finland set staged, train neg:pos
+  is only **~0.09**, so flooding is *not* a current risk and the cap won't bind at reasonable `R` — it
+  bites only when negatives genuinely dominate (e.g. a Finland-free retrain, or after adding many more
+  empty-water chips). The discipline that matters is **re-checking holdout recall after every retrain that
+  adds negatives**, not a specific ratio.
 
 ### O4 — More diverse real positives (the proven engine — highest recall leverage)
 - **Why:** real diverse data closed both generalization gaps (cross-region, cross-type) — twice. Remaining

@@ -74,6 +74,18 @@ def parse_args():
                    help="Drop detections on land (coast/rocks/islets) using the run's cached water_mask.tif "
                         "(build it with scripts/water_mask.py). Improvement plan O1 — kills the confident "
                         "rock/islet false positives at ~0 recall cost. On-water FPs need hard negatives, not this.")
+    p.add_argument("--open-water", action="store_true", default=truthy(env_or("DET_OPEN_WATER", "")),
+                   help="Drop detections whose whole box is water (min NDWI >= --ndwi-thresh) using the run's "
+                        "cached ndwi.tif (build it with scripts/ndwi_mask.py). Improvement plan O2. Distinct "
+                        "from --water-only (that drops LAND). NOTE - CALIBRATED NON-WIN on small-vessel scenes "
+                        "(Alonnisos 2026-07-18): the on-water FPs sit on glint/foam/swell that reflect NIR "
+                        "MORE than the tiny real boats, so no threshold drops FPs without killing recall — "
+                        "leave OFF unless you have per-scene reviewed verdicts showing it separates. See "
+                        "ndwi_mask.py. Every detection still gets a min_ndwi diagnostic field regardless.")
+    p.add_argument("--ndwi-thresh", type=float, default=float(env_or("DET_NDWI_THRESH", 0.2)),
+                   help="Water threshold for --open-water: a pixel with NDWI >= this counts as water, and a "
+                        "detection is dropped only when its minimum NDWI is still >= this (uniformly water). "
+                        "Higher = more conservative (fewer drops). Default 0.2; calibrate on the holdouts.")
     p.add_argument("--gpkg", type=Path, default=Path(env_or("DET_GPKG", str(DEFAULT_GPKG))),
                    help="MPA GeoPackage for the point-in-polygon test.")
     p.add_argument("--class-name", default=env_or("DET_CLASS_NAME", "boat"),
@@ -174,7 +186,7 @@ def build_geojson(detections):
              "geometry": {"type": "Point", "coordinates": d["centroid_wgs84"]},
              "properties": {"detection_id": d["detection_id"], "chip": d["chip"],
                             "confidence": d["confidence"], "inside_mpa": d["inside_mpa"],
-                            "on_water": d.get("on_water")}}
+                            "on_water": d.get("on_water"), "min_ndwi": d.get("min_ndwi")}}
             for d in detections
         ],
     }
@@ -247,6 +259,28 @@ def main():
         if args.water_only:
             print(f"  water-only requested but no water_mask.tif in {run_dir.name} "
                   f"(build it: python scripts/water_mask.py --run {run_dir}) — skipping filter")
+
+    # NDWI open-water filter (improvement plan O2). The cached ndwi.tif (scripts/ndwi_mask.py, from the
+    # scene's own B03/B08) tags each detection with the minimum NDWI in its box; --open-water drops the
+    # ones whose box is uniformly water (min NDWI >= --ndwi-thresh) — the on-WATER false-alarm class that
+    # --water-only (land) does not touch. A box containing any non-water pixel is kept (~no recall cost).
+    ndwi_path = run_dir / "ndwi.tif"
+    if ndwi_path.exists():
+        from ndwi_mask import NdwiSampler
+        nd = NdwiSampler(ndwi_path)
+        for d in deduped:
+            d["min_ndwi"] = nd.min_ndwi_bbox(d["bbox_wgs84"])
+        if args.open_water:
+            before = len(deduped)
+            deduped = [d for d in deduped if not nd.is_open_water_fp(d["bbox_wgs84"], args.ndwi_thresh)]
+            print(f"  open-water NDWI filter: {len(deduped)}/{before} kept "
+                  f"(dropped {before - len(deduped)} on pure water, thresh {args.ndwi_thresh:+g})")
+    else:
+        for d in deduped:
+            d["min_ndwi"] = None
+        if args.open_water:
+            print(f"  open-water requested but no ndwi.tif in {run_dir.name} "
+                  f"(build it: python scripts/ndwi_mask.py --run {run_dir}) — skipping filter")
 
     deduped.sort(key=lambda d: d["confidence"], reverse=True)
     for i, d in enumerate(deduped):

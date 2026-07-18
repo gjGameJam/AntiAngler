@@ -46,6 +46,13 @@ def parse_args():
                         "scene-aware holdout); all other AL chips split into train/val only. Prevents "
                         "adjacent tiles of one scene leaking across splits. E.g. --holdout-scene "
                         "fallbacktest portsaid.")
+    p.add_argument("--max-neg-ratio", type=float, default=None, metavar="R",
+                   help="Cap AL hard-negative (empty-label) chips in the TRAIN split to R x the number of "
+                        "positive AL chips in train, seeded-subsampling the excess. This is the O3 safeguard "
+                        "against the finetune-reef failure (too many negatives -> over-conservative -> recall "
+                        "drop). Default: no cap. Val and holdout(TEST) negatives are never capped (they only "
+                        "measure precision). Denominator is AL positives (the satellite domain), not the base "
+                        "photos. Re-check holdout recall after any retrain that changes this.")
     p.add_argument("--no-purge", action="store_true",
                    help="Do not remove existing '__' files first (default is to purge for idempotency).")
     p.add_argument("--dry-run", action="store_true", help="Report only; copy/delete nothing.")
@@ -82,6 +89,45 @@ def collect_pairs(tag_dirs):
             else:
                 print(f"  WARNING: no label for {img.name} in {td.name}; skipping")
     return pairs
+
+
+def negative_stems(pairs):
+    """Stems whose YOLO label file is empty (no boxes) = hard negatives (empty-water / glint / reef chips
+    a human reviewed and confirmed boat-free). These teach the detector to stop firing on textured water."""
+    neg = set()
+    for stem, (_img, lbl) in pairs.items():
+        try:
+            if lbl.stat().st_size == 0 or not lbl.read_text().strip():
+                neg.add(stem)
+        except OSError:
+            neg.add(stem)
+    return neg
+
+
+def cap_train_negatives(assignment, neg, max_neg_ratio, seed):
+    """Subsample AL hard-negatives in TRAIN down to max_neg_ratio x (AL positives in train). Returns the
+    number dropped. Val/test untouched — negatives there only measure precision, they aren't learned from."""
+    train = assignment["train"]
+    pos_train = [s for s in train if s not in neg]
+    neg_train = [s for s in train if s in neg]
+    cap = int(max_neg_ratio * len(pos_train))
+    if len(neg_train) <= cap:
+        print(f"  neg-cap: train hard-negatives {len(neg_train)} <= cap {cap} "
+              f"({max_neg_ratio:g} x {len(pos_train)} pos) - no drop")
+        return 0
+    rng = random.Random(seed + 1)  # a stream distinct from the split shuffle, so both stay reproducible
+    rng.shuffle(neg_train)
+    keep = set(neg_train[:cap])
+    assignment["train"] = [s for s in train if s not in neg or s in keep]
+    dropped = len(neg_train) - cap
+    print(f"  neg-cap: train hard-negatives {len(neg_train)} -> {cap} "
+          f"({max_neg_ratio:g} x {len(pos_train)} pos); dropped {dropped}")
+    return dropped
+
+
+def split_posneg(stems, neg):
+    p = sum(1 for s in stems if s not in neg)
+    return p, len(stems) - p
 
 
 def purge_al_files(data_dir):
@@ -159,7 +205,9 @@ def main():
     tag_dirs = collect_tag_dirs(args.exports)
     print(f"  export tags ({len(tag_dirs)}): " + (", ".join(t.name for t in tag_dirs) or "(none)"))
     pairs = collect_pairs(tag_dirs)
-    print(f"  active-learning chips found: {len(pairs)}")
+    neg = negative_stems(pairs)
+    print(f"  active-learning chips found: {len(pairs)}  "
+          f"(positives {len(pairs) - len(neg)}, hard-negatives {len(neg)})")
 
     base = count_base(data_dir)
     print(f"  base kept (untouched): train={base['train']} val={base['val']} test={base['test']}")
@@ -169,7 +217,12 @@ def main():
         held = sorted(s for s in pairs if any(f in s for f in args.holdout_scene))
         print(f"  holdout scenes -> TEST ({len(held)} chips via filters {args.holdout_scene}); "
               f"rest split train/val only")
-    print("  active-learning split: " + " ".join(f"{s}={len(v)}" for s, v in assignment.items()))
+    if args.max_neg_ratio is not None:
+        cap_train_negatives(assignment, neg, args.max_neg_ratio, args.seed)
+    # Show the pos/neg balance per split so the negative flooding risk (O3) is always visible.
+    print("  active-learning split: " + " ".join(
+        f"{s}={len(v)}(pos {split_posneg(v, neg)[0]}/neg {split_posneg(v, neg)[1]})"
+        for s, v in assignment.items()))
 
     if args.dry_run:
         print("\nDRY RUN - nothing written. Re-run without --dry-run to apply.")
@@ -193,8 +246,11 @@ def main():
         "seed": args.seed,
         "ratios": {"train": args.train, "val": args.val, "test": args.test},
         "holdout_scene": args.holdout_scene,
+        "max_neg_ratio": args.max_neg_ratio,
         "export_tags": [t.name for t in tag_dirs],
         "active_learning_chips": len(pairs),
+        "active_learning_posneg": {s: {"pos": split_posneg(v, neg)[0], "neg": split_posneg(v, neg)[1]}
+                                   for s, v in assignment.items()},
         "split_assignment": {s: sorted(v) for s, v in assignment.items()},
         "base_kept": base,
     }

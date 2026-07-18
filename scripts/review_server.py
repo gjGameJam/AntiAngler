@@ -72,15 +72,16 @@ class ReviewIn(BaseModel):
     boxes: List[Box]
 
 
-def load_reviews():
-    path = STATE["run_dir"] / "reviews.json"
+def load_reviews(run_dir):
+    """Load a single run's reviews.json (each run keeps its own, so export_labels --run is unchanged)."""
+    path = run_dir / "reviews.json"
     if path.exists():
         return json.loads(path.read_text())
     return {"reviewed_by": STATE["reviewer"], "chips": {}}
 
 
-def save_reviews(reviews):
-    path = STATE["run_dir"] / "reviews.json"
+def save_reviews(run_dir, reviews):
+    path = run_dir / "reviews.json"
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(reviews, indent=2))
     tmp.replace(path)
@@ -98,19 +99,22 @@ def geotiff_to_png(path):
 
 @app.get("/api/state")
 def api_state(_=Depends(require_token)):
-    reviews = load_reviews()
+    # One reviews.json per run; load each once and index chips into its own run's verdicts.
+    reviews_by_run = {name: load_reviews(rd) for name, rd in STATE["run_dirs"].items()}
     chips = []
     for chip in STATE["chips"]:
-        saved = reviews["chips"].get(chip["filename"])
+        saved = reviews_by_run[chip["run"]]["chips"].get(chip["filename"])
         chips.append({
             "id": chip["id"],
+            "run": chip["run"],
             "filename": chip["filename"],
-            "detections": STATE["detections_by_chip"].get(chip["filename"], []),
+            "tile_size": chip["tile_size"],
+            "has_companion": chip["has_companion"],
+            "detections": chip["detections"],
             "review": saved,
             "reviewed": bool(saved and saved.get("reviewed")),
         })
-    return {"run_dir": STATE["run_dir"].name, "tile_size": STATE["manifest"].get("tile_size", 640),
-            "wdpa": STATE["manifest"].get("wdpa"), "has_companion": STATE["has_companion"], "chips": chips}
+    return {"runs": list(STATE["run_dirs"].keys()), "chips": chips}
 
 
 @app.get("/chip/{chip_id}.png")
@@ -118,8 +122,9 @@ def chip_png(chip_id: int, _=Depends(require_token)):
     rec = STATE["chip_by_id"].get(chip_id)
     if not rec:
         raise HTTPException(status_code=404, detail="unknown chip")
-    path = (STATE["run_dir"] / rec["filename"]).resolve()
-    if not path.is_relative_to(STATE["run_dir"]) or not path.is_file():
+    run_dir = rec["_run_dir"]
+    path = (run_dir / rec["filename"]).resolve()
+    if not path.is_relative_to(run_dir) or not path.is_file():
         raise HTTPException(status_code=404, detail="chip not found")
     return Response(geotiff_to_png(path), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
@@ -131,8 +136,9 @@ def companion_png(chip_id: int, _=Depends(require_token)):
     rec = STATE["chip_by_id"].get(chip_id)
     if not rec:
         raise HTTPException(status_code=404, detail="unknown chip")
-    path = (STATE["run_dir"] / "companion" / f"{Path(rec['filename']).stem}.png").resolve()
-    if not path.is_relative_to(STATE["run_dir"]) or not path.is_file():
+    run_dir = rec["_run_dir"]
+    path = (run_dir / "companion" / f"{Path(rec['filename']).stem}.png").resolve()
+    if not path.is_relative_to(run_dir) or not path.is_file():
         raise HTTPException(status_code=404, detail="no companion")
     return Response(path.read_bytes(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
@@ -142,10 +148,11 @@ def post_review(chip_id: int, body: ReviewIn, _=Depends(require_token)):
     rec = STATE["chip_by_id"].get(chip_id)
     if not rec:
         raise HTTPException(status_code=404, detail="unknown chip")
-    reviews = load_reviews()
+    run_dir = rec["_run_dir"]
+    reviews = load_reviews(run_dir)
     reviews["chips"][rec["filename"]] = {"reviewed": body.reviewed,
                                          "boxes": [b.model_dump() for b in body.boxes]}
-    save_reviews(reviews)
+    save_reviews(run_dir, reviews)
     return {"ok": True,
             "reviewed_count": sum(1 for c in reviews["chips"].values() if c.get("reviewed"))}
 
@@ -267,16 +274,9 @@ async function api(path, opts) {
 
 async function boot() {
   const s = await api("/api/state");
-  chips = s.chips; tileSize = s.tile_size || 640;
-  cv.width = tileSize; cv.height = tileSize;
-  cvc.width = tileSize; cvc.height = tileSize;
-  hasComp = !!s.has_companion;
-  if (hasComp) {
-    document.getElementById("compPane").hidden = false;
-    document.getElementById("wrap").classList.add("dual");
-    document.getElementById("lblMain").textContent = "SAR (VV / VH) — label on this side";
-  }
-  document.getElementById("runName").textContent = s.run_dir + (s.wdpa ? "  •  " + s.wdpa.NAME : "");
+  chips = s.chips;
+  document.getElementById("runName").textContent =
+      s.runs.length === 1 ? s.runs[0] : (s.runs.length + " runs • " + chips.length + " chips");
   loadChip(0);
   refreshProgress();
 }
@@ -284,6 +284,14 @@ async function boot() {
 function loadChip(i) {
   idx = Math.max(0, Math.min(chips.length - 1, i));
   const c = chips[idx];
+  // Chip size + companion pane are per-chip now (a batch can mix runs / optical + SAR).
+  tileSize = c.tile_size || 640;
+  cv.width = tileSize; cv.height = tileSize;
+  cvc.width = tileSize; cvc.height = tileSize;
+  hasComp = !!c.has_companion;
+  document.getElementById("compPane").hidden = !hasComp;
+  document.getElementById("wrap").classList.toggle("dual", hasComp);
+  document.getElementById("lblMain").textContent = hasComp ? "SAR (VV / VH) — label on this side" : "chip";
   // Working set: saved review boxes if present, else detections seeded as pending.
   if (c.review && c.review.boxes) {
     boxes = c.review.boxes.map(b => ({...b}));
@@ -300,7 +308,7 @@ function loadChip(i) {
     imgC.onload = draw; imgC.onerror = draw;  // missing companion -> boxes on a blank pane
     imgC.src = "/companion/" + c.id + ".png?token=" + encodeURIComponent(TOKEN);
   }
-  document.getElementById("pos").textContent = "chip " + (idx + 1) + " / " + chips.length;
+  document.getElementById("pos").textContent = "chip " + (idx + 1) + " / " + chips.length + "  •  " + c.run;
   document.getElementById("status").textContent = c.reviewed ? "already reviewed" : "";
   draw();
 }
@@ -383,14 +391,15 @@ async function save(reviewed) {
     return;
   }
   const c = chips[idx];
-  const r = await api("/api/review/" + c.id, {
+  await api("/api/review/" + c.id, {
     method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, H),
     body: JSON.stringify({ reviewed, boxes })
   });
   c.review = { reviewed, boxes: boxes.map(b => ({...b})) };
   c.reviewed = reviewed;
+  const doneGlobal = chips.filter(x => x.reviewed).length;  // count across all runs in the batch
   document.getElementById("status").textContent = (reviewed ? "reviewed ✓" : "draft saved") +
-      "  (" + r.reviewed_count + "/" + chips.length + " reviewed)";
+      "  (" + doneGlobal + "/" + chips.length + " reviewed)";
   refreshProgress();
   if (reviewed && idx < chips.length - 1) loadChip(idx + 1);
 }
@@ -426,10 +435,18 @@ def env_or(name, default):
     return val if val not in (None, "") else default
 
 
+def _default_runs():
+    """REVIEW_RUN env fallback: a single run dir path, or None. CLI --run (one or more) overrides."""
+    val = os.getenv("REVIEW_RUN")
+    return [Path(val)] if val not in (None, "") else None
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="Local review UI for stage-2 boat detections.")
-    p.add_argument("--run", type=Path, default=env_or("REVIEW_RUN", None),
-                   help="A sat_fetch run dir (with chips/, manifest.json, detections.json).")
+    p.add_argument("--run", type=Path, nargs="+", default=_default_runs(),
+                   help="One or more sat_fetch run dirs (each with chips/, manifest.json, detections.json). "
+                        "Chips from all are reviewed in one batched session; each verdict is written back to "
+                        "its own run's reviews.json, so export_labels.py --run <dir> is unchanged.")
     p.add_argument("--host", default=env_or("REVIEW_HOST", "127.0.0.1"),
                    help="Bind address. Keep 127.0.0.1 (loopback) unless you know why not.")
     p.add_argument("--port", type=int, default=int(env_or("REVIEW_PORT", 8000)))
@@ -440,40 +457,61 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.run is None:
-        raise RuntimeError("Provide a run dir: --run data/raw/sentinel2/<run>/")
-    run_dir = args.run.resolve()
-    manifest_path = run_dir / "manifest.json"
-    if not manifest_path.exists():
-        raise RuntimeError(f"No manifest.json in {run_dir} - run sat_fetch.py first.")
-    manifest = json.loads(manifest_path.read_text())
+    if not args.run:
+        raise RuntimeError("Provide one or more run dirs: --run data/raw/sentinel2/<run>/ [<run2>/ ...]")
 
-    det_path = run_dir / "detections.json"
-    detections_by_chip = {}
-    if det_path.exists():
-        for d in json.loads(det_path.read_text()).get("detections", []):
-            detections_by_chip.setdefault(d["chip"], []).append(
-                {"detection_id": d["detection_id"], "bbox_pixel": d["bbox_pixel"],
-                 "confidence": d.get("confidence")})
-    else:
-        print("NOTE: no detections.json - run detect_boats.py first to pre-populate boxes "
-              "(you can still label chips from scratch).")
+    # Reviewer name is consulted by load_reviews() when a run has no reviews.json yet.
+    STATE["reviewer"] = args.reviewer
 
-    chips = [dict(id=i, **c) for i, c in enumerate(manifest["chips"])]
+    chips = []
+    run_dir_map = {}   # name -> resolved Path (insertion order = review order)
+    for raw in args.run:
+        run_dir = raw.resolve()
+        manifest_path = run_dir / "manifest.json"
+        if not manifest_path.exists():
+            raise RuntimeError(f"No manifest.json in {run_dir} - run sat_fetch.py first.")
+        manifest = json.loads(manifest_path.read_text())
+        name = run_dir.name
+        if name in run_dir_map:
+            raise RuntimeError(f"Duplicate run dir name {name!r} - pass each run once.")
+        run_dir_map[name] = run_dir
+
+        det_by_chip = {}
+        det_path = run_dir / "detections.json"
+        if det_path.exists():
+            for d in json.loads(det_path.read_text()).get("detections", []):
+                det_by_chip.setdefault(d["chip"], []).append(
+                    {"detection_id": d["detection_id"], "bbox_pixel": d["bbox_pixel"],
+                     "confidence": d.get("confidence")})
+        else:
+            print(f"NOTE: no detections.json in {name} - its chips start with no boxes "
+                  "(you can still label from scratch).")
+
+        has_comp = (run_dir / "companion").is_dir()
+        tile = int(manifest.get("tile_size", 640))
+        for c in manifest["chips"]:
+            chips.append({
+                "id": len(chips), "run": name, "_run_dir": run_dir,
+                "filename": c["filename"], "tile_size": tile, "has_companion": has_comp,
+                "detections": det_by_chip.get(c["filename"], []),
+            })
+
     STATE.update(
-        run_dir=run_dir, manifest=manifest, chips=chips,
+        chips=chips,
         chip_by_id={c["id"]: c for c in chips},
-        detections_by_chip=detections_by_chip,
-        has_companion=(run_dir / "companion").is_dir(),
-        reviewer=args.reviewer,
+        run_dirs=run_dir_map,
         token=secrets.token_urlsafe(24),
         allowed_hosts={f"{args.host}:{args.port}", f"127.0.0.1:{args.port}", f"localhost:{args.port}"},
     )
 
+    n_with_det = sum(1 for c in chips if c["detections"])
     url = f"http://127.0.0.1:{args.port}/?token={STATE['token']}"
     print("=" * 72)
-    print(f"  AntiAngler review server  -  {len(chips)} chips  -  {len(detections_by_chip)} chips with detections")
-    print(f"  Open this URL (contains the single-use auth token):\n\n    {url}\n")
+    print(f"  AntiAngler review server  -  {len(run_dir_map)} run(s)  -  {len(chips)} chips  "
+          f"-  {n_with_det} with detections")
+    for name in run_dir_map:
+        print(f"    - {name}  ({sum(1 for c in chips if c['run'] == name)} chips)")
+    print(f"\n  Open this URL (contains the single-use auth token):\n\n    {url}\n")
     print("  Bound to loopback only. Ctrl+C to stop.")
     print("=" * 72, flush=True)  # flush the whole banner now so the URL shows before uvicorn blocks
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
