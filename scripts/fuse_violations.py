@@ -19,6 +19,12 @@ from pathlib import Path
 # - An UNMATCHED in-MPA detection is a DARK candidate - the product signal (detection - AIS).
 #   A MATCHED one is an identified (cooperative) vessel, still a candidate violation inside a
 #   no-take IUCN Ia/Ib MPA, but not a dark one.
+# - OPTIONALLY (--vessels, ROADMAP Phase 3 step 3), a normalized GFW vessel-records file from
+#   scripts/gfw_vessels.py enriches the MATCHED events by MMSI: it fills identity (name/flag/
+#   gear/imo) and fishing_hours/fishing_probability, and lifts the violation_score when GFW shows
+#   the identified vessel was FISHING in the MPA (or is IUU-listed) - a confirmed fishing violation
+#   scores as high as a dark one. This is a SEPARATE optional join (gfw_vessels.py is its own
+#   ingester); with no --vessels the verdicts and scores are unchanged (the GFW fields stay null).
 # - Emit one violation_events.json (+ .geojson of dark points for QGIS) per run, using the
 #   violation_events schema specified in CLAUDE.md. Atomic writes (.tmp -> replace), same as
 #   every other stage.
@@ -102,6 +108,18 @@ def parse_args(argv=None):
                    help="Violation-score multiplier for an AIS-MATCHED (cooperative, identified) "
                         "event. Dark events score at full presence_confidence; matched ones are "
                         "down-weighted by this factor for ranking. Default 0.25.")
+    p.add_argument("--vessels", type=Path, default=env_or("FUSE_VESSELS", None),
+                   help="OPTIONAL normalized GFW vessel-records file (from scripts/gfw_vessels.py) to "
+                        "enrich MATCHED events by MMSI: fills vessel_name/flag/gear_type/imo and "
+                        "fishing_hours/fishing_probability, and lifts violation_score toward "
+                        "--fishing-weight when GFW shows the identified vessel was fishing (or is "
+                        "IUU-listed). Absent -> no enrichment, identical to the AIS-only behavior.")
+    p.add_argument("--fishing-weight", type=float, default=float(env_or("FUSE_FISHING_WEIGHT", 1.0)),
+                   help="Violation-score multiplier for a matched vessel that GFW confirms was FISHING "
+                        "in the MPA (fishing_probability 1.0). The matched score interpolates from "
+                        "--matched-weight (probability 0) to this (probability 1). Default 1.0 — a "
+                        "confirmed-fishing identified vessel in a no-take MPA is as strong a signal as "
+                        "a dark one. Only used when --vessels supplies fishing_probability.")
     return p.parse_args(argv)
 
 
@@ -112,6 +130,27 @@ def load_detections(run_dir):
     if not dpath.exists():
         raise RuntimeError(f"No detections.json in {run_dir} - run detect_boats.py (or sar_seed.py) first.")
     return json.loads(dpath.read_text())
+
+
+def load_vessels(vessels_path):
+    """Load a normalized GFW vessel-records file (scripts/gfw_vessels.py output) into a dict keyed
+    by string MMSI. Accepts a bare list or {"vessels": [...]}. Each record may carry shipname/flag/
+    geartype/imo/fishing_hours/fishing_probability/iuu_listed. Absent path -> {} (no enrichment).
+    Later records for the same MMSI win (the writer already dedups; this is just defensive)."""
+    if vessels_path is None:
+        return {}
+    path = Path(vessels_path)
+    if not path.exists():
+        raise RuntimeError(f"Vessels file not found: {path}")
+    doc = json.loads(path.read_text())
+    rows = doc.get("vessels", []) if isinstance(doc, dict) else doc
+    by_mmsi = {}
+    for row in rows:
+        mmsi = row.get("mmsi", row.get("ssvid", row.get("MMSI")))
+        if mmsi in (None, ""):
+            continue
+        by_mmsi[str(mmsi)] = row
+    return by_mmsi
 
 
 def load_manifest(run_dir):
@@ -272,31 +311,71 @@ def modality_evidence(manifest, detections_doc):
     return "satellite"
 
 
-def build_event(idx, det, match, scene_dt_iso, mpa, sensor, matched_weight):
+def _clamp01(value):
+    return max(0.0, min(1.0, float(value)))
+
+
+def matched_score(presence, matched_weight, fishing_weight, fishing_probability, iuu_listed):
+    """Violation-score weight for a MATCHED (identified) vessel. With no GFW fishing info the weight
+    is matched_weight (cooperative transit, down-weighted). When GFW supplies fishing_probability the
+    weight interpolates matched_weight -> fishing_weight (a confirmed-fishing vessel in a no-take MPA
+    is as strong a signal as a dark one). An IUU-listed vessel escalates to fishing_weight."""
+    w = matched_weight
+    if fishing_probability is not None:
+        w = matched_weight + (fishing_weight - matched_weight) * _clamp01(fishing_probability)
+    if iuu_listed:
+        w = max(w, fishing_weight)
+    return None if presence is None else round(presence * w, 4)
+
+
+def build_event(idx, det, match, scene_dt_iso, mpa, sensor, matched_weight,
+                vessel=None, fishing_weight=1.0):
     """Map one fused detection onto the CLAUDE.md violation_events schema.
 
     A single satellite acquisition is instantaneous, so entry_time == exit_time == the scene
     datetime and duration_hours is null (multi-pass track reconstruction is future work).
-    fishing_probability / fishing_hours are null here - they are filled by the future GFW
-    fishing-effort join (gfw_vessels.py), at which point the full CLAUDE.md violation_score
-    formula applies. Until then violation_score ranks by presence + darkness only.
+
+    Enrichment (only for a MATCHED event when a GFW vessel record is supplied via --vessels):
+    fills vessel_name/flag/gear_type/imo and fishing_hours/fishing_probability from GFW, adds "GFW"
+    to evidence, and lifts violation_score per matched_score(). With no vessel record the matched
+    score stays presence*matched_weight and the GFW fields stay null - unchanged from AIS-only.
     """
     is_dark = match is None
     presence = det.get("confidence")
-    if presence is None:
-        score = None
+
+    # GFW enrichment fields (matched + vessel record only; else all None)
+    vessel_name = flag = gear_type = imo = fishing_hours = fishing_probability = None
+    iuu_listed = gfw_vessel_id = None
+    if not is_dark and vessel:
+        vessel_name = vessel.get("shipname") or vessel.get("name")
+        flag = vessel.get("flag")
+        gear_type = vessel.get("geartype") or vessel.get("gear_type")
+        imo = vessel.get("imo")
+        fishing_hours = vessel.get("fishing_hours")
+        fishing_probability = vessel.get("fishing_probability")
+        iuu_listed = vessel.get("iuu_listed")
+        gfw_vessel_id = vessel.get("vessel_id") or vessel.get("vesselId")
+
+    if is_dark:
+        score = None if presence is None else round(presence * 1.0, 4)
     else:
-        score = round(presence * (1.0 if is_dark else matched_weight), 4)
+        score = matched_score(presence, matched_weight, fishing_weight, fishing_probability, iuu_listed)
+
     evidence = [sensor] if is_dark else [sensor, "AIS"]
+    if not is_dark and vessel:
+        evidence.append("GFW")
     return {
         "event_id": f"evt_{idx:05d}",
         "detection_id": det.get("detection_id"),
         "ais_status": "dark" if is_dark else "matched",
         "vessel_id": None if is_dark else match["mmsi"],
         "mmsi": None if is_dark else match["mmsi"],
-        "vessel_name": None,
-        "flag": None,
-        "gear_type": None,
+        "gfw_vessel_id": gfw_vessel_id,
+        "vessel_name": vessel_name,
+        "flag": flag,
+        "gear_type": gear_type,
+        "imo": imo,
+        "iuu_listed": iuu_listed,
         "mpa_id": (mpa or {}).get("WDPAID"),
         "mpa_name": (mpa or {}).get("NAME"),
         "centroid_wgs84": det.get("centroid_wgs84"),
@@ -306,8 +385,8 @@ def build_event(idx, det, match, scene_dt_iso, mpa, sensor, matched_weight):
         "duration_hours": None,
         "distance_from_port_km": None,
         "presence_confidence": presence,
-        "fishing_hours": None,
-        "fishing_probability": None,
+        "fishing_hours": fishing_hours,
+        "fishing_probability": fishing_probability,
         "violation_score": score,
         "ais_match": match,          # null when dark; the matched ping details when matched
         "evidence": evidence,
@@ -333,10 +412,12 @@ def build_geojson(events):
 
 # --------------------------------------------------------------------------- orchestration
 
-def fuse(detections_doc, pings, scene_dt, args, sensor):
-    """Core, pure function (no IO): returns (events, stats). Testable directly."""
+def fuse(detections_doc, pings, scene_dt, args, sensor, vessels_by_mmsi=None):
+    """Core, pure function (no IO): returns (events, stats). Testable directly.
+    vessels_by_mmsi (optional) enriches matched events by MMSI (from --vessels / gfw_vessels.py)."""
     dt_window_s = args.dt_minutes * 60.0
     mpa = detections_doc.get("wdpa")
+    vessels_by_mmsi = vessels_by_mmsi or {}
 
     candidates = []
     for det in detections_doc.get("detections", []):
@@ -361,9 +442,15 @@ def fuse(detections_doc, pings, scene_dt, args, sensor):
     # rank by violation_score desc (dark first at equal presence), assign event ids
     events.sort(key=lambda dm: (dm[1] is not None, -(dm[0].get("confidence") or 0.0)))
     scene_dt_iso = scene_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-    built = [build_event(i, det, match, scene_dt_iso, mpa, sensor, args.matched_weight)
-             for i, (det, match) in enumerate(events)]
-    stats = {"in_scope": len(candidates), "dark": dark, "matched": matched, "emitted": len(built)}
+    built, enriched = [], 0
+    for i, (det, match) in enumerate(events):
+        vessel = vessels_by_mmsi.get(match["mmsi"]) if match else None
+        if vessel:
+            enriched += 1
+        built.append(build_event(i, det, match, scene_dt_iso, mpa, sensor, args.matched_weight,
+                                 vessel=vessel, fishing_weight=args.fishing_weight))
+    stats = {"in_scope": len(candidates), "dark": dark, "matched": matched,
+             "emitted": len(built), "enriched": enriched}
     return built, stats
 
 
@@ -387,33 +474,39 @@ def main(argv=None):
     scene_dt = parse_timestamp(scene_dt_raw)
 
     pings = load_ais(args.ais.resolve())
+    vessels_by_mmsi = load_vessels(args.vessels)
 
     print("FUSE:")
     print(f"  run={run_dir}")
     print(f"  ais={args.ais}  pings={len(pings)}")
+    if args.vessels:
+        print(f"  vessels={args.vessels}  gfw_records={len(vessels_by_mmsi)}")
     print(f"  scene_datetime={scene_dt.strftime('%Y-%m-%dT%H:%M:%SZ')}  sensor={sensor}")
     print(f"  dt-window=+/-{args.dt_minutes}min  slack={args.slack_m}m  max-speed={args.max_speed_kn}kn")
     print(f"  detections={detections_doc.get('count')}  "
           f"scope={'all' if args.all_detections else 'inside_mpa'}")
 
-    events, stats = fuse(detections_doc, pings, scene_dt, args, sensor)
-    print(f"  in scope: {stats['in_scope']}  ->  DARK {stats['dark']}  |  matched {stats['matched']}")
+    events, stats = fuse(detections_doc, pings, scene_dt, args, sensor, vessels_by_mmsi)
+    print(f"  in scope: {stats['in_scope']}  ->  DARK {stats['dark']}  |  matched {stats['matched']}"
+          f"  (GFW-enriched {stats['enriched']})")
 
     doc = {
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "run_dir": run_dir.name,
         "source_detections": "detections.json",
         "ais_file": str(args.ais),
+        "vessels_file": str(args.vessels) if args.vessels else None,
         "sensor": sensor,
         "scene_datetime": scene_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "params": {"dt_minutes": args.dt_minutes, "slack_m": args.slack_m,
                    "max_speed_kn": args.max_speed_kn, "min_conf": args.min_conf,
                    "all_detections": args.all_detections, "dark_only": args.dark_only,
-                   "matched_weight": args.matched_weight},
+                   "matched_weight": args.matched_weight, "fishing_weight": args.fishing_weight},
         "wdpa": detections_doc.get("wdpa"),
         "ais_ping_count": len(pings),
         "counts": {"in_scope": stats["in_scope"], "dark": stats["dark"],
-                   "matched": stats["matched"], "emitted": stats["emitted"]},
+                   "matched": stats["matched"], "emitted": stats["emitted"],
+                   "gfw_enriched": stats["enriched"]},
         "violation_events": events,
     }
     write_atomic(run_dir / "violation_events.json", json.dumps(doc, indent=2))

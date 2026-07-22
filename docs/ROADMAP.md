@@ -207,7 +207,7 @@ over the same AOI within a day and compare).
 
 ---
 
-## Phase 3 — AIS dark-vessel reframe (the operational payoff) — matcher ✅ + AISStream ingest ✅ (2026-07-22), GFW fishing-join remaining
+## Phase 3 — AIS dark-vessel reframe (the operational payoff) — matcher ✅ + AISStream ingest ✅ + GFW vessel/fishing join ✅ (2026-07-22)
 
 **Goal / the product:** **dark-vessel = detection − AIS**. An in-MPA detection with no matching AIS
 track = a candidate violation. This converts "impossible perfect recall" into achievable "mismatch
@@ -235,11 +235,29 @@ are `[lat,lon]` order (reverse of GeoJSON), `time_utc` is a Go nanosecond string
 not-available sentinels map to `null`. Only extra dep is `websocket-client` (`requirements-ais.txt`,
 lazy-imported). Limitation: AISStream is *live-only* (positions from now forward), so it fits a
 near-real-time fetch-imagery-and-AIS-together workflow; a historical scene needs an archive/Spire source
-(a future sibling ingester). **Remaining for Phase 3 = step 3: the GFW fishing-effort join** — a
-`gfw_vessels.py` sibling (its own data stream, `/v3/vessels` + Insights) that fills the
-`fishing_probability`/`fishing_hours` currently left `null`, so the full `CLAUDE.md` `violation_score`
-formula applies (and adds IUU-listing / AIS-gap flags). Optionally a Skylight cross-check of the dark
-calls, and a batch driver that fetches imagery + AIS + fuses per MPA.
+(a future sibling ingester).
+
+**Status (2026-07-22): step 3 — the GFW vessel/fishing join — is BUILT & tested.**
+`scripts/gfw_vessels.py` (its own data stream; never imports the matcher) resolves MMSIs — explicit
+`--mmsi`, or pulled from a `violation_events.json` via `--from-events`, or an AIS file via `--from-ais`
+— to GFW identity (Vessels search: `vessel_id`/`shipname`/`flag`/`geartype`/`imo`) + fishing hours
+(Events API) + optional Insights (`--insights`: IUU-list / AIS-off / no-take-MPA fishing), and writes
+a normalized vessel-records file to `data/raw/gfw_vessels/`. `fuse_violations.py` gained an **optional,
+strictly-additive `--vessels` join** that enriches matched events by MMSI (fills identity +
+`fishing_hours`/`fishing_probability`, adds `"GFW"` to evidence) and lifts `violation_score`: the matched
+weight interpolates `--matched-weight`→`--fishing-weight` with fishing_probability, and IUU escalates to
+full. **With no `--vessels`, verdicts and scores are unchanged from the AIS-only path** (the event just
+gains null GFW fields) — the pre-existing fuse tests pass unchanged. Offline-tested (`scripts/tests/test_gfw_vessels.py` 16 tests + 6 new enrichment tests in
+`test_fuse_violations.py`): GFW response normalizers (identity/fishing/insights, tolerant), the MMSI
+collectors, and a normalize→record→fuse round trip — all with synthetic GFW-shaped payloads, no token.
+**Honesty caveat:** the GFW v3 request paths/params + response shapes follow GFW's documented API but were
+**not verified against the live service** (no token here — same as `gfw_fetch.py`); parsers are tolerant
+and `--dry-run` prints the plan without a token/network — verify on the first real run.
+
+**Remaining P3 (optional polish, not blocking the product):** a Skylight cross-check of the dark calls
+(free dark-vessel feed, ground-truth), a batch driver that fetches imagery + AIS + fuses per MPA, and
+tightening `fishing_probability` from a window-level prior to a location-specific signal (the Insights
+`fishing_in_no_take_mpa` field already carries the MPA-specific version).
 
 **The detection side is already join-ready.** `detect_boats.py` emits, per detection: `confidence`,
 `centroid_wgs84 [lon,lat]`, `bbox_wgs84`, `inside_mpa`, `detection_id`, `chip`, plus a `scene.datetime`
@@ -277,11 +295,12 @@ in `detections.json` (:122–:123, :206, :229). The fusion layer is greenfield.
      supports MPAs (https://skylight.global/platform). Consume it first for validation / tip-and-cue
      before building the matcher — fastest path to a working product, and a ground-truth check for our own
      dark calls.
-   - **GFW Vessels / Insights API** (`/v3/vessels`, `/v3/insights/vessels`) for per-vessel identity + AIS-off
-     events. NOTE: current `gfw_fetch.py` only calls the **coarse gridded** `/v3/4wings/report`
-     (group-by `VESSEL_ID`) — that's effort *density* per cell, **not** per-vessel positions; a **new
-     per-vessel call** is needed (a `gfw_vessels.py` sibling, same token/`.env` pattern, its own data
-     stream). Insights also gives IUU-listing / AIS-gap flags that feed `violation_score`.
+   - ✅ **DONE (2026-07-22) — `scripts/gfw_vessels.py`. GFW Vessels / Insights API** (`/v3/vessels`,
+     `/v3/events`, `/v3/insights/vessels`) for per-vessel identity + fishing hours + AIS-off/IUU.
+     NOTE: current `gfw_fetch.py` only calls the **coarse gridded** `/v3/4wings/report`
+     (group-by `VESSEL_ID`) — that's effort *density* per cell, **not** per-vessel positions; the **new
+     per-vessel call** is `gfw_vessels.py` (same token/`.env` pattern, its own data stream). Insights also
+     gives IUU-listing / AIS-gap flags that feed `violation_score` (via the `--vessels` join).
    - Or a **raw AIS feed** for position-level tracks: **AISStream** (free websocket, bbox-filtered, good
      for a live matcher) or **Spire** (paid, global satellite AIS, better open-ocean coverage where
      terrestrial AIS is blind — which is exactly where dark vessels hide).
@@ -319,7 +338,9 @@ match); validate the dark calls against Skylight's feed for the same AOI/time.
 | Refactor prerequisite ✅ | `main()`-guard + provider dispatch both done (AUDIT.md #1 / Phase 1 step 1) |
 | Ingest live AIS (P3) ✅ | `aisstream_fetch.py --bbox … --duration 120` (or `--wdpa-id`) → `data/raw/ais/ais_positions_*.json`; needs `AISSTREAM_API_KEY`, `--dry-run` to test wiring |
 | Fuse AIS → dark vessels (P3) ✅ | `fuse_violations.py --run <run> --ais data/raw/ais/<file>.json` → `violation_events.json` (+ dark `.geojson`) |
-| Test the P3 stages offline | `python scripts/tests/test_fuse_violations.py` and `test_aisstream_fetch.py` (synthetic; no network / no key / no ML deps) |
+| GFW identity/fishing (P3) ✅ | `gfw_vessels.py --from-events <violation_events.json> --start … --end …` → `data/raw/gfw_vessels/*.json`; needs `GFW_API_TOKEN`, `--dry-run` to test wiring |
+| Enrich matched events (P3) ✅ | re-run `fuse_violations.py … --vessels data/raw/gfw_vessels/<file>.json` (fills identity + fishing, lifts score for confirmed-fishing / IUU) |
+| Test the P3 stages offline | `python scripts/tests/test_fuse_violations.py`, `test_aisstream_fetch.py`, `test_gfw_vessels.py` (synthetic; no network / no key / no ML deps) |
 | Violation schema | `CLAUDE.md` → "Output Schema" / `violation_events` |
 
 ## Key sources

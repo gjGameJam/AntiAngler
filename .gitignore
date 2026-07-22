@@ -217,6 +217,9 @@ data/raw/gfw/
 # Normalized AIS position snapshots written by scripts/aisstream_fetch.py
 data/raw/ais/
 
+# Normalized GFW per-vessel identity/activity records written by scripts/gfw_vessels.py
+data/raw/gfw_vessels/
+
 # Sentinel-2 imagery chip runs written by scripts/sat_fetch.py
 data/raw/sentinel2/
 

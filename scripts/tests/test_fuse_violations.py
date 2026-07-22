@@ -41,6 +41,12 @@ def make_ais(tmp, pings):
     return path
 
 
+def make_vessels(tmp, vessels):
+    path = Path(tmp) / "vessels.json"
+    path.write_text(json.dumps({"vessels": vessels}))
+    return path
+
+
 def run_fuse(run, ais, extra=None):
     argv = ["--run", str(run), "--ais", str(ais)] + (extra or [])
     fv.main(argv)
@@ -177,6 +183,76 @@ class TestScopingAndScoring(unittest.TestCase):
         gj = json.loads((run / "violation_events.geojson").read_text())
         self.assertEqual(len(gj["features"]), 1)
         self.assertEqual(gj["features"][0]["properties"]["ais_status"], "dark")
+
+
+class TestVesselEnrichment(unittest.TestCase):
+    """The optional --vessels (GFW) enrichment join, ROADMAP Phase 3 step 3. A matched detection
+    at [25.0,37.0] on MMSI 111 + a dark detection at [25.1,37.1]."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self._tmp = self._td.name
+        self._run = make_run(self._tmp, [
+            {"confidence": 0.8, "centroid_wgs84": [25.0, 37.0],
+             "bbox_wgs84": [25.0, 37.0, 25.001, 37.001], "inside_mpa": True},   # matches 111
+            {"confidence": 0.8, "centroid_wgs84": [25.1, 37.1],
+             "bbox_wgs84": [25.1, 37.1, 25.101, 37.101], "inside_mpa": True},   # dark
+        ], wdpa={"WDPAID": 555, "NAME": "Test MPA"})
+        self._ais = make_ais(self._tmp, [{"mmsi": 111, "lon": 25.0, "lat": 37.0,
+                                          "timestamp": SCENE_DT, "sog": 0.1, "cog": 0}])
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _events(self, vessels, extra=None):
+        vf = make_vessels(self._tmp, vessels)
+        doc = run_fuse(self._run, self._ais, ["--vessels", str(vf)] + (extra or []))
+        return {e["detection_id"]: e for e in doc["violation_events"]}, doc
+
+    def test_fishing_vessel_scores_up_and_identity_filled(self):
+        ev, _ = self._events([{"mmsi": "111", "vessel_id": "gfw-abc", "shipname": "MARIA",
+                               "flag": "ESP", "geartype": "trawlers", "imo": "1234567",
+                               "fishing_hours": 3.5, "fishing_probability": 1.0, "iuu_listed": False}])
+        m = ev["det_00000"]
+        self.assertEqual(m["ais_status"], "matched")
+        self.assertEqual(m["vessel_name"], "MARIA")
+        self.assertEqual(m["flag"], "ESP")
+        self.assertEqual(m["gear_type"], "trawlers")
+        self.assertEqual(m["imo"], "1234567")
+        self.assertEqual(m["fishing_hours"], 3.5)
+        self.assertEqual(m["gfw_vessel_id"], "gfw-abc")
+        self.assertIn("GFW", m["evidence"])
+        self.assertAlmostEqual(m["violation_score"], 0.8, places=4)   # fishing prob 1.0 -> full weight
+
+    def test_non_fishing_vessel_keeps_matched_floor(self):
+        ev, _ = self._events([{"mmsi": "111", "shipname": "IDLE", "fishing_probability": 0.0}])
+        self.assertAlmostEqual(ev["det_00000"]["violation_score"], 0.2, places=4)  # 0.8 * matched_weight
+
+    def test_partial_probability_interpolates(self):
+        ev, _ = self._events([{"mmsi": "111", "fishing_probability": 0.5}])
+        # weight = 0.25 + (1.0-0.25)*0.5 = 0.625 ; score = 0.8 * 0.625 = 0.5
+        self.assertAlmostEqual(ev["det_00000"]["violation_score"], 0.5, places=4)
+
+    def test_iuu_escalates_even_without_fishing(self):
+        ev, _ = self._events([{"mmsi": "111", "fishing_probability": 0.0, "iuu_listed": True}])
+        self.assertAlmostEqual(ev["det_00000"]["violation_score"], 0.8, places=4)  # escalated to full
+        self.assertTrue(ev["det_00000"]["iuu_listed"])
+
+    def test_dark_event_unaffected_by_vessels(self):
+        ev, doc = self._events([{"mmsi": "111", "fishing_probability": 1.0}])
+        d = ev["det_00001"]
+        self.assertEqual(d["ais_status"], "dark")
+        self.assertAlmostEqual(d["violation_score"], 0.8, places=4)   # dark = presence, unchanged
+        self.assertIsNone(d["fishing_probability"])
+        self.assertEqual(doc["counts"]["gfw_enriched"], 1)
+
+    def test_no_matching_record_is_noop(self):
+        # vessels file has a different MMSI -> matched event stays at the AIS-only floor, no identity
+        ev, _ = self._events([{"mmsi": "999", "shipname": "OTHER", "fishing_probability": 1.0}])
+        m = ev["det_00000"]
+        self.assertAlmostEqual(m["violation_score"], 0.2, places=4)
+        self.assertIsNone(m["vessel_name"])
+        self.assertNotIn("GFW", m["evidence"])
 
 
 if __name__ == "__main__":
