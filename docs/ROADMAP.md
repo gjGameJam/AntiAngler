@@ -207,19 +207,36 @@ over the same AOI within a day and compare).
 
 ---
 
-## Phase 3 — AIS dark-vessel reframe (the operational payoff, greenfield)
+## Phase 3 — AIS dark-vessel reframe (the operational payoff) — matcher ✅ (2026-07-22), live AIS ingest remaining
 
 **Goal / the product:** **dark-vessel = detection − AIS**. An in-MPA detection with no matching AIS
 track = a candidate violation. This converts "impossible perfect recall" into achievable "mismatch
 precision" — and it *filters the detector's false positives* (the open-water FP problem from conf-0.20),
 so it makes the current model good enough. This is the project's stated purpose.
 
+**Status (2026-07-22): step 1 — the matcher — is BUILT & tested.** `scripts/fuse_violations.py` reads a
+run's `detections.json` + a normalized AIS positions file and emits `violation_events.json` (+ a
+`.geojson` of dark points), deciding dark-vs-matched per in-MPA detection with the velocity-aware
+feasible-movement envelope below. It is **pure stdlib** (no torch/rasterio/shapely — the fields it needs
+are already in `detections.json`), so it runs anywhere and is validated **offline** by
+`scripts/tests/test_fuse_violations.py` (the three verification cases at the bottom of this section all
+pass: near-coincident match must-not-flag, known dark, and the 20-min-off fast-mover the fixed radius
+would miss but the envelope catches — plus an infeasible-ping control). The AIS **input contract** is our
+own source-agnostic schema (`{mmsi, lon, lat, timestamp, sog?, cog?}`, JSON or CSV; AISStream
+`PositionReport` mapping documented in `CLAUDE.md`). **Remaining for Phase 3 = steps 2–3: a live AIS
+ingester** (its own module — AISStream chosen first — that normalizes into the contract; house rule keeps
+it out of the matcher) and the GFW fishing-effort join that fills `fishing_probability`/`fishing_hours`
+(currently `null`) so the full `violation_score` formula applies.
+
 **The detection side is already join-ready.** `detect_boats.py` emits, per detection: `confidence`,
 `centroid_wgs84 [lon,lat]`, `bbox_wgs84`, `inside_mpa`, `detection_id`, `chip`, plus a `scene.datetime`
 in `detections.json` (:122–:123, :206, :229). The fusion layer is greenfield.
 
 **Steps:**
-1. **New `scripts/fuse_violations.py`** — the matcher. Inputs: a run's `detections.json` (each detection
+1. ✅ **DONE (2026-07-22) — `scripts/fuse_violations.py`** — the matcher, built exactly to this spec
+   (velocity-aware gate, dark-vs-matched, atomic `violation_events.json` + dark `.geojson`, `--dt-minutes`
+   / `--slack-m` / `--max-speed-kn` / `--dark-only` / `--matched-weight` / `--all-detections` knobs, all
+   `FUSE_*` env fallbacks). Original spec kept below for the record. Inputs: a run's `detections.json` (each detection
    already carries `centroid_wgs84 [lon,lat]`, `bbox_wgs84`, `inside_mpa`, `confidence`, `detection_id`,
    plus a top-level `scene.datetime` — `detect_boats.py:122-123,206,229`) and a set of AIS positions with
    `(mmsi, lon, lat, timestamp, sog, cog)`. Algorithm, per **in-MPA** detection:
@@ -284,6 +301,8 @@ match); validate the dark calls against Skylight's feed for the same AOI/time.
 | Select a source | `sat_fetch.py --provider {pc,s1}` (default `pc`; `SAT_PROVIDER` env). `pc`=S2 optical, `s1`=S1 SAR — both free, no credentials |
 | Fetch a SAR scene | `sat_fetch.py --provider s1 --bbox … --dry-run` then without `--dry-run` (free, all-weather; needs its own `best_sar.pt`) |
 | Refactor prerequisite ✅ | `main()`-guard + provider dispatch both done (AUDIT.md #1 / Phase 1 step 1) |
+| Fuse AIS → dark vessels (P3) ✅ | `fuse_violations.py --run <run> --ais positions.json` → `violation_events.json` (+ dark `.geojson`) |
+| Test the matcher offline | `python scripts/tests/test_fuse_violations.py` (synthetic; no network / no ML deps) |
 | Violation schema | `CLAUDE.md` → "Output Schema" / `violation_events` |
 
 ## Key sources
