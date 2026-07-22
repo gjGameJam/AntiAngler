@@ -1,0 +1,12 @@
+# AIS ingestion dependency (scripts/aisstream_fetch.py, ROADMAP Phase 3 step 2).
+# Kept SEPARATE from requirements.txt on purpose: the daily gfw.yml cron installs
+# requirements.txt, and it must not pull anything it doesn't need. Install this only
+# when running the live AIS ingester:
+#     pip install -r requirements-ais.txt
+#
+# aisstream_fetch.py lazy-imports this (the module + its offline tests import fine
+# without it), so it's only required at actual collection time.
+#
+# NOTE: pin verified against the PyPI release line; confirm in the local venv (Python 3.11)
+# the same way requirements.txt/-ml.txt were.
+websocket-client==1.8.0     # synchronous websocket client for the AISStream feed

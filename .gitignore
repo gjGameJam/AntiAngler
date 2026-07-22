@@ -214,6 +214,9 @@ data/raw/WDPA/WDPA_Sep2025_Public_shp_0/WDPA_Sep2025_Public_shp-points.cpg
 # GFW raw API dumps — fetched daily by .github/workflows/gfw.yml
 data/raw/gfw/
 
+# Normalized AIS position snapshots written by scripts/aisstream_fetch.py
+data/raw/ais/
+
 # Sentinel-2 imagery chip runs written by scripts/sat_fetch.py
 data/raw/sentinel2/
 
