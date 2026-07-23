@@ -202,26 +202,34 @@ track = a candidate violation. This converts "impossible perfect recall" into ac
 precision" — and it *filters the detector's false positives* (the open-water FP problem from conf-0.20),
 so it makes the current model good enough. This is the project's stated purpose.
 
-**Status: all three stages BUILT & offline-tested (2026-07-22).** The remaining work to *finish* Phase 3
-— live validation of the AISStream/GFW calls, a real end-to-end MPA run, a batch driver, operator-facing
-ranked output, and optional Skylight / historical-AIS — plus the definition of done is in
-**`docs/PHASE3_PLAN.md`**. Per-script contracts are in `CLAUDE.md`.
+**Status: the whole sandbox-buildable pipeline is BUILT & offline-tested (2026-07-23).** Every stage that
+can be written and validated without live credentials is done; the only remaining work is 🏠 do-from-home
+(live validation + real runs). The actionable checklist + definition of done is in **`docs/PHASE3_PLAN.md`**;
+per-script contracts + first-run setup are in `CLAUDE.md`.
 
-Built (each its own module; ingestion never imports the matcher — house rule):
-- **`fuse_violations.py`** (pure stdlib) — per in-MPA detection, dark-vs-matched via a **velocity-aware
-  feasible-movement envelope** (`reach = sog·Δt + slack`, haversine ≤ reach, max-speed fallback when sog
-  is missing/zero — never a fixed radius, which over-flags fast vessels and under-flags during AIS gaps).
-  Emits `violation_events.json` + dark `.geojson`. Optional `--vessels` GFW enrichment lifts a matched
-  score when GFW shows the identified vessel fishing / IUU-listed.
-- **`aisstream_fetch.py`** — AISStream websocket adapter → normalized AIS contract (`data/raw/ais/`).
-  Live-only (near-real-time workflow; historical scenes need an archive source — PHASE3_PLAN 3C).
+Built — six scripts, each its own module (ingestion never imports the matcher — house rule):
+- **`fuse_violations.py`** (pure stdlib) — the matcher. Per in-MPA detection, dark-vs-matched via a
+  **velocity-aware feasible-movement envelope** (`reach = sog·Δt + slack`, haversine ≤ reach, max-speed
+  fallback when sog is missing/zero — never a fixed radius, which over-flags fast vessels and under-flags
+  during AIS gaps). Emits `violation_events.json` (+ dark `.geojson`). Optional `--vessels` GFW enrichment
+  lifts a matched score when GFW shows the identified vessel fishing / IUU-listed.
+- **`aisstream_fetch.py`** — live AISStream websocket adapter → normalized AIS contract (`data/raw/ais/`).
+  Live-only (near-real-time workflow).
+- **`marinecadastre_fetch.py`** — historical AIS: normalizes a NOAA MarineCadastre archive CSV into the
+  same AIS contract, AOI/time-filtered (for fusing *past* scenes over US waters).
 - **`gfw_vessels.py`** — GFW per-vessel identity + fishing hours (+ optional Insights: IUU / AIS-off /
-  no-take-MPA fishing) → vessel-records (`data/raw/gfw_vessels/`), read by `fuse_violations.py --vessels`.
+  no-take-MPA fishing; `--region-bbox`/`--wdpa-id` makes fishing_probability MPA-specific) → vessel-records
+  (`data/raw/gfw_vessels/`), read by `fuse_violations.py --vessels`.
+- **`report_violations.py`** — read-only operator output: ranks `violation_events.json` into a CSV + a
+  self-contained HTML report by `violation_score`.
+- **`scan_violations.py`** — thin batch driver sequencing detect → fuse → (GFW-enrich) → report via each
+  stage's `main(argv)`.
 
-50 offline tests (synthetic fixtures; no network / key / ML deps). 🏠 **DO FROM HOME — not yet run
-against the live AISStream / GFW services** (the remote sandbox blocks those hosts and has no key/token).
-Live validation of the calls + a first real violation from real imagery is the crux of finishing the
-phase — `docs/PHASE3_PLAN.md` Workstream 1 (which also flags what parts of the rest can be built here).
+The `violation_events.json` schema is pinned in `docs/PIPELINE.md`. **81 offline tests** (synthetic
+fixtures + a committed end-to-end contract guard; no network / key / ML deps). 🏠 **DO FROM HOME — not yet
+run against the live AISStream / GFW services** (the remote sandbox blocks those hosts and has no
+key/token). Live validation of the calls + a first real violation from real imagery is the crux of
+finishing the phase — `docs/PHASE3_PLAN.md` Workstream 1.
 
 **Why it makes the modest detector good enough:** dark-vessel = detection − AIS *inverts the metric* — a
 low-conf false positive sitting on a matching AIS track is filtered out, a real dark vessel with no AIS
@@ -247,8 +255,11 @@ survives. The product cares about *mismatch precision* (which fusion improves), 
 | Fuse AIS → dark vessels (P3) ✅ | `fuse_violations.py --run <run> --ais data/raw/ais/<file>.json` → `violation_events.json` (+ dark `.geojson`) |
 | GFW identity/fishing (P3) ✅ | `gfw_vessels.py --from-events <violation_events.json> --start … --end …` → `data/raw/gfw_vessels/*.json`; needs `GFW_API_TOKEN`, `--dry-run` to test wiring |
 | Enrich matched events (P3) ✅ | re-run `fuse_violations.py … --vessels data/raw/gfw_vessels/<file>.json` (fills identity + fishing, lifts score for confirmed-fishing / IUU) |
-| Test the P3 stages offline | `python scripts/tests/test_fuse_violations.py`, `test_aisstream_fetch.py`, `test_gfw_vessels.py` (synthetic; no network / no key / no ML deps) |
-| Violation schema | `CLAUDE.md` → "Output Schema" / `violation_events` |
+| Historical AIS (P3) ✅ | `marinecadastre_fetch.py --csv AIS_YYYY_MM_DD.csv --wdpa-id <id> --start … --end …` → `data/raw/ais/…` (fuse past US-waters scenes) |
+| Rank / report (P3) ✅ | `report_violations.py --run <run>` → ranked `violations_report_*.csv` + self-contained `.html` |
+| One-shot driver (P3) ✅ | `scan_violations.py --run <run> --ais <file>.json [--gfw --wdpa-id <id>]` (fuse → enrich → report) |
+| Test the P3 stages offline | `python -m unittest discover -s scripts/tests -p 'test_*.py'` (81 tests; synthetic, no network / key / ML deps) |
+| Violation schema | `docs/PIPELINE.md` → `violation_events.json` (pinned) |
 
 ## Key sources
 Small-object: SAHI 2202.06934, copy-paste 1902.07296, NWD 2110.13389, P2/SOD-YOLOv8 2408.04786.

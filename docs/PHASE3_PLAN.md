@@ -1,6 +1,6 @@
 # PHASE 3 COMPLETION PLAN — AIS dark-vessel product
 
-_Snapshot: 2026-07-22. The plan for finishing Phase 3 (the AIS dark-vessel reframe). Read
+_Snapshot: 2026-07-23. The plan for finishing Phase 3 (the AIS dark-vessel reframe). Read
 `docs/ROADMAP.md` Phase 3 for the strategic framing and `CLAUDE.md` for the per-script contracts;
 this file is the actionable "what's left" list. Update the checkboxes as items land._
 
@@ -20,11 +20,14 @@ precision*, which the fusion improves.
 | GFW identity/fishing | `gfw_vessels.py` (+ `--region` MPA filter, 3A) | `data/raw/gfw_vessels/*.json` | `test_gfw_vessels.py` (23) |
 | Enrichment join | `fuse_violations.py --vessels` | enriched `violation_events.json` | (in the 15 above) |
 | Operator output (2B) | `report_violations.py` | ranked CSV + self-contained HTML | `test_report_violations.py` (9) |
+| Batch driver (2A) | `scan_violations.py` | sequences the stages | `test_scan_violations.py` (5) |
+| Historical AIS (3C) | `marinecadastre_fetch.py` | archive CSV → AIS contract | `test_marinecadastre_fetch.py` (7) |
 | Contract guard (4A) | `scripts/tests/fixtures/` | — | `test_pipeline_e2e.py` (3) |
 
-**69 offline tests**, no network / key / ML deps. The `violation_events.json` schema is pinned in
+**81 offline tests**, no network / key / ML deps. The `violation_events.json` schema is pinned in
 `docs/PIPELINE.md` (4B). The full chain:
-`sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels → report_violations`.
+`sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels → report_violations`
+(or one `scan_violations.py` invocation).
 
 **The gap:** every stage above is validated only against *synthetic* fixtures. Nothing has run against
 the live AISStream / GFW services, and the loop has never produced a violation from real imagery. That
