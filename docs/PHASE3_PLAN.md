@@ -29,7 +29,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
 
 ---
 
-## Workstream 1 — Live validation (do first; everything else assumes the calls work)
+## Workstream 1 — Live validation  🏠 DO FROM HOME  (do first; everything else assumes the calls work)
 
 > **Environment note (2026-07-23): live validation cannot run in the Claude Code web/remote sandbox.**
 > The egress policy blocks all three service hosts at CONNECT (`gateway.api.globalfishingwatch.org`,
@@ -86,6 +86,14 @@ is what "finish Phase 3" means, and it drives the ordering below.
 ---
 
 ## Workstream 2 — Operational orchestration (turn scripts into a product)
+
+> **Dependency on the 🏠 do-from-home steps (Workstream 1):** the *code* for both items below can be
+> **built and unit-tested here** in the sandbox with synthetic fixtures — same as every P3 stage so far.
+> - **2B (ranked output)** is fully independent: it reads `violation_events.json` and ranks it, so it
+>   builds and tests offline end to end; it only needs *real* events to display eventually.
+> - **2A (batch driver)** can be *written* offline, but a real end-to-end *run* invokes the live AIS/GFW
+>   ingesters, so its live validation waits on Workstream 1. Neither item depends on the Phase 2 SAR
+>   training (that is an alternative detection modality). Net: build both here; defer only 2A's live run.
 
 ### 2A. Per-MPA batch driver — `scripts/scan_violations.py`  ☐
 - **Do:** a thin orchestrator that, given a `--wdpa-id` (or a list), runs
@@ -175,10 +183,10 @@ is what "finish Phase 3" means, and it drives the ordering below.
 
 ## Recommended sequence
 
-1. **1A → 1B** (live validation) — unblocks trust; do `3A` while in `gfw_vessels.py` for 1B.
-2. **1C** (real end-to-end run) — first real violation.
-3. **2A → 2B** (batch driver + ranked output) — the product surface.
-4. **Optional:** `3B` Skylight, `3C` historical AIS, `4A/4B/4C` closeout.
+1. 🏠 **1A → 1B** (live validation, do from home) — unblocks trust; do `3A` while in `gfw_vessels.py` for 1B.
+2. 🏠 **1C** (real end-to-end run, do from home) — first real violation.
+3. **2A → 2B** (batch driver + ranked output) — the product surface; **buildable here now**, only 2A's live run waits on step 1.
+4. **Optional:** `3B` Skylight, `3C` historical AIS (both do-from-home / access-gated), `4A/4B/4C` closeout (buildable here).
 
 Steps 1–3 need only free accounts (AISStream key, GFW token) already in scope for the project; no paid
 services and no new heavy dependencies.

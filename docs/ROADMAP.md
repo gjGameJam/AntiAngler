@@ -20,7 +20,7 @@ holdout to confirm the 0.67 magnitude) plus the imagery/AIS phases below.
 
 **The remaining ceiling is physical:** at 10 m GSD a 20 m boat ≈ 2 px, near the optical information
 floor. Free model tricks are largely spent, and there is **no free global higher-resolution optical**
-source to raise it (Phase 1 below is not pursued). So the next real gains come from **free SAR imagery**
+source to raise it. So the next real gains come from **free SAR imagery**
 (Sentinel-1, Phase 2 — all-weather, finds dark/AIS-off vessels), **more/diverse training data**, and
 **reframing the goal as AIS-mismatch detection** (Phase 3), which is the actual product.
 
@@ -35,12 +35,11 @@ Sentinel-1 SAR (P2, built) ├─► vs AIS/GFW (P3) ─► dark? ─► S1×S2 
 Each phase ships value alone. **Recommended order: P2 (Sentinel-1 SAR — provider built, train the SAR
 detector next) and P3 (AIS fusion).** P3 is the highest strategic value and works even with a
 modest-recall detector; P2 adds free all-weather/night/dark coverage. Both free imagery providers
-(`pc`, `s1`) are built behind the `sat_fetch.py` seam (see the prerequisite section). Phase 1 (higher-res
-commercial optical) is **not pursued** — no free source; see below.
+(`pc`, `s1`) are built behind the `sat_fetch.py` seam (see the prerequisite section).
 
 ---
 
-## Cross-cutting prerequisite (do before P1/P2): AUDIT P1.1 — the `main()`-guard refactor ✅ DONE (2026-07-15)
+## Cross-cutting prerequisite (done before the imagery phases): AUDIT #1 — the `main()`-guard refactor ✅ DONE (2026-07-15)
 
 **Done.** The former module-top-level orchestration (was `sat_fetch.py:409-529`) is now wrapped in
 `def main(argv=None):` guarded by `if __name__ == "__main__": raise SystemExit(main())`, and
@@ -76,8 +75,7 @@ Sentinel-2 optical, `providers/s1.py` = Sentinel-1 SAR), `--provider {pc,s1}` se
 routes through it while staying the orchestrator. The seam names above are still importable from
 `sat_fetch` (back-compat bound-method aliases). A new source is now a new `Provider` subclass + one
 `register()` line. **`providers/s1.py` (Sentinel-1 GRD SAR) is fully implemented** (Phase 2 provider,
-below). Higher-res commercial optical (the old Phase 1) is **not pursued** — the project is $0-budget
-and there is no free global source (see Phase 1).
+below).
 
 **Verified:** `import sat_fetch` runs no fetch; the six seams + `main` are callable; `--help` exits 0;
 the no-AOI path still raises + exits 1. This was AUDIT.md item #1; it unblocks both imagery phases and
@@ -116,20 +114,6 @@ chips and it doesn't address the sub-cell problem — try only if P2 plateaus.
 
 ---
 
-## Phase 1 — Higher-resolution optical (NOT PURSUED — no free source)
-
-> **Not pursued (2026-07-15).** Raising the 10 m GSD was the original Phase 1 (a 20 m boat is ~7 px
-> at 3 m vs ~2 px at 10 m), but there is **no free global higher-resolution optical source**, and
-> this is a **$0-budget** project — commercial 3 m optical (paid tasking/archive) is out of scope.
-> The only free sub-10 m optical is **NAIP** (0.6–1 m, on Planetary Computer, no credentials) but it
-> is **US-only and ~annual** — useful for CONUS MPAs and for generating high-res *training* chips,
-> not global near-real-time patrol. If a CONUS-only NAIP source is ever wanted it slots into the same
-> seam as a new `providers/naip.py`. Otherwise the free levers for small-vessel detection are
-> **Phase 2 (Sentinel-1 SAR — built)**, **more/diverse training data** (the proven engine), and
-> **Phase 3 (AIS fusion)**.
-
----
-
 ## Phase 2 — Sentinel-1 SAR (free, complementary modality) — provider ✅ + real-chip validation ✅ (2026-07-15)
 
 **Goal:** all-weather, day/night, **dark metallic-hull** detection — the wide-area workhorse GFW/Skylight
@@ -164,7 +148,7 @@ or mosaic adjacent scenes. **Deliberate deviation from step 3:** kept a *percent
 fixed `[-25,0] dB` window — it auto-adapts and the real chips look correct, so keep it unless a fixed
 window proves better on more scenes. **Remaining for Phase 2 = train a separate SAR detector (step 4).**
 
-**Prerequisites:** P1.1 refactor ✅. **Sentinel-1 GRD IS on Planetary Computer** (`sentinel-1-grd`), so the
+**Prerequisites:** the `main()`-guard refactor ✅ (AUDIT #1). **Sentinel-1 GRD IS on Planetary Computer** (`sentinel-1-grd`), so the
 STAC/catalog side is close to a `--collection` change — but the sensor differs fundamentally.
 
 **Steps (1-3 ✅ done in `providers/s1.py`; 4 remaining):**
@@ -191,11 +175,15 @@ STAC/catalog side is close to a `--collection` change — but the sensor differs
      writes fine as a plain 2-band GeoTIFF, **but the YOLO detector wants 3 channels**. Standard trick:
      build a **pseudo-RGB [VV, VH, VV/VH-ratio]** (or VV, VH, VV−VH) 3-band chip so the same
      `detect_boats.py` inference path and the 3-channel model input work unchanged.
-4. **Train a separate SAR detector.** Different modality → its own `best_sar.pt`; **transfer from public
-   SAR ship datasets** — **xView3-SAR** (arXiv 2206.00897, the closest analog: Sentinel-1 dual-pol,
-   maritime, dark-vessel labels), HRSID, or SAR-Ship — rather than the optical base weights, which encode
-   the wrong texture priors. Optionally speckle-filter (Lee/Refined-Lee) before tiling; test whether it
-   helps recall on 1–5 px targets or just erases them.
+4. 🏠 **DO FROM HOME — Train a separate SAR detector.** Needs local GPU/compute with the machine kept
+   awake (a real 30-epoch run; the remote sandbox can't train — see `docs/STATUS.md` on the smoke-test
+   sleep-inflation). Different modality → its own `best_sar.pt`; **transfer from public SAR ship
+   datasets** — **xView3-SAR** (arXiv 2206.00897, the closest analog: Sentinel-1 dual-pol, maritime,
+   dark-vessel labels), HRSID, or SAR-Ship — rather than the optical base weights, which encode the wrong
+   texture priors. Optionally speckle-filter (Lee/Refined-Lee) before tiling; test whether it helps recall
+   on 1–5 px targets or just erases them. The reviewed SAR training set already exists
+   (`data/processed/sar_training_exports/deep/`, 206 boxes / 112 hard-neg) + the build/train flow is
+   smoke-validated — this step is the full training run + promote.
 
 **Data contract:** same run-dir shape; chips carry CRS+affine so geolocation is unchanged. Detections
 feed the same Phase 3 fusion. Manifest already records `provider`/`collection`/`bands`, so a SAR run is
@@ -230,9 +218,10 @@ Built (each its own module; ingestion never imports the matcher — house rule):
 - **`gfw_vessels.py`** — GFW per-vessel identity + fishing hours (+ optional Insights: IUU / AIS-off /
   no-take-MPA fishing) → vessel-records (`data/raw/gfw_vessels/`), read by `fuse_violations.py --vessels`.
 
-50 offline tests (synthetic fixtures; no network / key / ML deps). **Not yet run against the live
-AISStream / GFW services** — that, plus a first real violation from real imagery, is the crux of finishing
-the phase (`docs/PHASE3_PLAN.md` Workstream 1).
+50 offline tests (synthetic fixtures; no network / key / ML deps). 🏠 **DO FROM HOME — not yet run
+against the live AISStream / GFW services** (the remote sandbox blocks those hosts and has no key/token).
+Live validation of the calls + a first real violation from real imagery is the crux of finishing the
+phase — `docs/PHASE3_PLAN.md` Workstream 1 (which also flags what parts of the rest can be built here).
 
 **Why it makes the modest detector good enough:** dark-vessel = detection − AIS *inverts the metric* — a
 low-conf false positive sitting on a matching AIS track is filtered out, a real dark vessel with no AIS
@@ -253,7 +242,7 @@ survives. The product cares about *mismatch precision* (which fusion improves), 
 | Add an imagery source | subclass `Provider` (`scripts/providers/base.py`), `register()` it (`providers/__init__.py`); copy `providers/pc.py` (optical) or `providers/s1.py` (SAR) |
 | Select a source | `sat_fetch.py --provider {pc,s1}` (default `pc`; `SAT_PROVIDER` env). `pc`=S2 optical, `s1`=S1 SAR — both free, no credentials |
 | Fetch a SAR scene | `sat_fetch.py --provider s1 --bbox … --dry-run` then without `--dry-run` (free, all-weather; needs its own `best_sar.pt`) |
-| Refactor prerequisite ✅ | `main()`-guard + provider dispatch both done (AUDIT.md #1 / Phase 1 step 1) |
+| Refactor prerequisite ✅ | `main()`-guard + provider dispatch both done (AUDIT.md #1) |
 | Ingest live AIS (P3) ✅ | `aisstream_fetch.py --bbox … --duration 120` (or `--wdpa-id`) → `data/raw/ais/ais_positions_*.json`; needs `AISSTREAM_API_KEY`, `--dry-run` to test wiring |
 | Fuse AIS → dark vessels (P3) ✅ | `fuse_violations.py --run <run> --ais data/raw/ais/<file>.json` → `violation_events.json` (+ dark `.geojson`) |
 | GFW identity/fishing (P3) ✅ | `gfw_vessels.py --from-events <violation_events.json> --start … --end …` → `data/raw/gfw_vessels/*.json`; needs `GFW_API_TOKEN`, `--dry-run` to test wiring |
