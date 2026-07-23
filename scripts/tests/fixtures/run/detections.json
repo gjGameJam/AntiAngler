@@ -1,0 +1,42 @@
+{
+  "generated_utc": "2026-07-14T10:30:00Z",
+  "run_dir": "run",
+  "weights": ".../best.pt",
+  "model": "yolov8",
+  "conf_threshold": 0.15,
+  "scene": { "item_id": "S2_FIXTURE", "datetime": "2026-07-14T10:00:00Z", "eo:cloud_cover": 4.2, "aoi_cloud": 0.0 },
+  "wdpa": { "WDPAID": 555622064, "NAME": "Seal Rocks" },
+  "count": 3,
+  "detections": [
+    {
+      "detection_id": "det_00000",
+      "chip": "chips/chip_r00000_c00000.tif",
+      "class": "boat",
+      "confidence": 0.8,
+      "bbox_pixel": [412, 155, 431, 178],
+      "centroid_wgs84": [25.0, 37.0],
+      "bbox_wgs84": [25.0, 37.0, 25.001, 37.001],
+      "inside_mpa": true
+    },
+    {
+      "detection_id": "det_00001",
+      "chip": "chips/chip_r00003_c00003.tif",
+      "class": "boat",
+      "confidence": 0.6,
+      "bbox_pixel": [88, 510, 109, 533],
+      "centroid_wgs84": [25.5, 37.5],
+      "bbox_wgs84": [25.5, 37.5, 25.501, 37.501],
+      "inside_mpa": true
+    },
+    {
+      "detection_id": "det_00002",
+      "chip": "chips/chip_r00009_c00009.tif",
+      "class": "boat",
+      "confidence": 0.9,
+      "bbox_pixel": [10, 20, 30, 40],
+      "centroid_wgs84": [26.0, 38.0],
+      "bbox_wgs84": [26.0, 38.0, 26.001, 38.001],
+      "inside_mpa": false
+    }
+  ]
+}

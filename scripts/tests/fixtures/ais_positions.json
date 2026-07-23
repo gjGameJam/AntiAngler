@@ -1,0 +1,10 @@
+{
+  "generated_utc": "2026-07-14T10-05-00Z",
+  "source": "aisstream",
+  "bbox_wgs84": [24.9, 36.9, 26.1, 38.1],
+  "wdpa": { "WDPAID": 555622064, "NAME": "Seal Rocks" },
+  "positions": [
+    { "mmsi": 211476060, "lon": 25.0003, "lat": 37.0003, "timestamp": "2026-07-14T10:02:00Z", "sog": 0.3, "cog": 180, "name": "NEPTUNE" },
+    { "mmsi": 636019888, "lon": 24.95, "lat": 36.95, "timestamp": "2026-07-14T10:01:00Z", "sog": 11.4, "cog": 65 }
+  ]
+}

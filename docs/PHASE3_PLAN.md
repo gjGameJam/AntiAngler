@@ -11,17 +11,20 @@ candidate violation; a matched one is an identified vessel (down-weighted unless
 This inverts the metric from the detector's uncatchable *recall* (10 m GSD floor) to *mismatch
 precision*, which the fusion improves.
 
-## Built and offline-tested (2026-07-22)
+## Built and offline-tested (updated 2026-07-23)
 
 | Stage | Script | Output | Tests |
 |---|---|---|---|
 | AIS ingest | `aisstream_fetch.py` | `data/raw/ais/ais_positions_*.json` | `test_aisstream_fetch.py` (19) |
 | Fusion (matcher) | `fuse_violations.py` | `violation_events.json` + dark `.geojson` | `test_fuse_violations.py` (15) |
-| GFW identity/fishing | `gfw_vessels.py` | `data/raw/gfw_vessels/*.json` | `test_gfw_vessels.py` (16) |
+| GFW identity/fishing | `gfw_vessels.py` (+ `--region` MPA filter, 3A) | `data/raw/gfw_vessels/*.json` | `test_gfw_vessels.py` (23) |
 | Enrichment join | `fuse_violations.py --vessels` | enriched `violation_events.json` | (in the 15 above) |
+| Operator output (2B) | `report_violations.py` | ranked CSV + self-contained HTML | `test_report_violations.py` (9) |
+| Contract guard (4A) | `scripts/tests/fixtures/` | — | `test_pipeline_e2e.py` (3) |
 
-50 offline tests, no network / key / ML deps. The full chain:
-`sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels`.
+**69 offline tests**, no network / key / ML deps. The `violation_events.json` schema is pinned in
+`docs/PIPELINE.md` (4B). The full chain:
+`sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels → report_violations`.
 
 **The gap:** every stage above is validated only against *synthetic* fixtures. Nothing has run against
 the live AISStream / GFW services, and the loop has never produced a violation from real imagery. That
@@ -106,7 +109,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
 - **Acceptance:** one command produces `violation_events.json` for a WDPAID end to end.
 - **Effort:** M.
 
-### 2B. Operator-facing ranked output  ☐  *(CLAUDE.md checklist "Output & Alerts", still unchecked)*
+### 2B. Operator-facing ranked output  ✅ DONE (2026-07-23) — `scripts/report_violations.py`
 - **Do:** `scripts/report_violations.py` that aggregates `violation_events.json` across runs into a ranked
   table (by `violation_score`) — CSV + a self-contained HTML (mirror `review_server.py`'s zero-dependency
   style), one row per event with mpa_name, status, score, vessel identity, evidence, and a link to the chip.
@@ -119,7 +122,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
 
 ## Workstream 3 — Signal quality (precision)
 
-### 3A. MPA-specific `fishing_probability`  ☐  *(small, high value — do alongside 1B)*
+### 3A. MPA-specific `fishing_probability`  ✅ DONE (2026-07-23, code+tests; live GFW call still 🏠)
 - **Problem:** `summarize_fishing` currently sets `fishing_probability = 1.0` if the vessel fished
   *anywhere* in the `--start`/`--end` window — a vessel-level prior, not "fished in *this* MPA".
 - **Do:** pass the MPA region to the Events API so fishing events are spatially filtered to the MPA
@@ -153,13 +156,13 @@ is what "finish Phase 3" means, and it drives the ordering below.
 
 ## Workstream 4 — Robustness & closeout
 
-### 4A. Committed end-to-end fixture test  ☐
+### 4A. Committed end-to-end fixture test  ✅ DONE (2026-07-23)
 - **Do:** a tiny `scripts/tests/fixtures/` (`detections.json` + `ais.json` + `vessels.json`) and a test that
   runs the whole fuse+enrich chain over them — guards the three modules' shared contracts as a unit (today
   each is tested in isolation + round trips in temp dirs).
 - **Effort:** S.
 
-### 4B. Pin the real `violation_events` JSON schema in `docs/PIPELINE.md`  ☐
+### 4B. Pin the real `violation_events` JSON schema in `docs/PIPELINE.md`  ✅ DONE (2026-07-23)
 - **Do:** document the exact keys `fuse_violations.py` emits today (incl. `ais_status`, `ais_match`,
   `gfw_vessel_id`, `iuu_listed`, `evidence`, the null-until-GFW fields). The CLAUDE.md prose + the SQL
   sketch predate the implementation; pin the actual shape so downstream (2B, dashboards) can rely on it.
@@ -176,9 +179,9 @@ is what "finish Phase 3" means, and it drives the ordering below.
 
 - [ ] AISStream + GFW calls verified live once; any v3 shape drift fixed in the (isolated) parsers (1A, 1B).
 - [ ] One real MPA yields a spot-checked `violation_events.json` — a confirmed dark and a confirmed matched (1C).
-- [ ] `fishing_probability` is MPA-specific, or the window-level-prior limitation is explicitly accepted (3A).
+- [x] `fishing_probability` is MPA-specific (3A — `--region-bbox`/`--wdpa-id`; live GFW call still 🏠).
 - [ ] A batch driver runs the loop for a `--wdpa-id` (2A).
-- [ ] An operator-facing ranked output exists (2B).
+- [x] An operator-facing ranked output exists (2B — `report_violations.py`).
 - [ ] *(Optional, strengthens the product)* Skylight cross-check (3B) and/or historical AIS (3C).
 
 ## Recommended sequence

@@ -1,0 +1,22 @@
+{
+  "generated_utc": "2026-07-14T10-10-00Z",
+  "source": "gfw",
+  "window": { "start": "2026-07-08", "end": "2026-07-15" },
+  "insights": false,
+  "vessel_count": 1,
+  "vessels": [
+    {
+      "mmsi": "211476060",
+      "vessel_id": "gfw-abc123",
+      "shipname": "NEPTUNE",
+      "flag": "DEU",
+      "geartype": "trawlers",
+      "imo": "9012345",
+      "callsign": "DHAB",
+      "fishing_hours": 2.4,
+      "fishing_event_count": 3,
+      "fishing_probability": 1.0,
+      "source": "gfw"
+    }
+  ]
+}

@@ -416,6 +416,64 @@ Export rule: for each `reviewed: true` chip, write a label line for every box wi
 
 Matches `BoatDetection`'s existing `PascalToYolo.py` output exactly.
 
+### `violation_events.json` — stage 4 fusion (P3, EXISTS)
+
+Written by `scripts/fuse_violations.py` into the run dir (atomic), the AIS × detection fusion output.
+This is the **actual emitted shape** (pin it before building consumers). A sibling
+`violation_events.geojson` holds a point `FeatureCollection` of the **dark** events only.
+
+```json
+{
+  "generated_utc": "2026-07-23T22:07:14Z",
+  "run_dir": "2026-07-14T10-00-00Z_seal-rocks",
+  "source_detections": "detections.json",
+  "ais_file": ".../ais_positions_....json",
+  "vessels_file": ".../gfw_vessels_....json",   // null unless --vessels was passed
+  "sensor": "Sentinel-2",                        // or "Sentinel-1" / "satellite"
+  "scene_datetime": "2026-07-14T10:00:00Z",
+  "params": { "dt_minutes": 30.0, "slack_m": 500.0, "max_speed_kn": 25.0, "min_conf": 0.0,
+              "all_detections": false, "dark_only": false, "matched_weight": 0.25, "fishing_weight": 1.0 },
+  "wdpa": { "WDPAID": 555622064, "NAME": "Seal Rocks" },   // or null for bbox runs
+  "ais_ping_count": 1,
+  "counts": { "in_scope": 2, "dark": 1, "matched": 1, "emitted": 2, "gfw_enriched": 1 },
+  "violation_events": [
+    {
+      "event_id": "evt_00000",              // rank order (highest violation_score first)
+      "detection_id": "det_00001",          // back-reference into detections.json
+      "ais_status": "dark",                 // "dark" (no AIS match) | "matched"
+      "vessel_id": null, "mmsi": null,      // MMSI when matched, else null
+      "gfw_vessel_id": null,                // GFW internal id — filled only via --vessels
+      "vessel_name": null, "flag": null, "gear_type": null, "imo": null, "iuu_listed": null,  // GFW enrichment
+      "mpa_id": 555622064, "mpa_name": "Seal Rocks",
+      "centroid_wgs84": [25.10, 37.10],
+      "chip": "chips/chip_r00001_c00001.tif",
+      "entry_time": "2026-07-14T10:00:00Z", "exit_time": "2026-07-14T10:00:00Z",  // == scene time (instantaneous)
+      "duration_hours": null, "distance_from_port_km": null,   // not derivable from a single snapshot
+      "presence_confidence": 0.66,          // = the detection confidence
+      "fishing_hours": null, "fishing_probability": null,      // filled only via --vessels (GFW)
+      "violation_score": 0.66,              // dark = presence; matched interpolates matched_weight→fishing_weight
+      "ais_match": null,                    // null when dark; the matched-ping detail object when matched
+      "evidence": ["Sentinel-2"]            // + "AIS" when matched, + "GFW" when enriched
+    }
+  ]
+}
+```
+
+The **`ais_match`** object (present on matched events, else `null`):
+
+```json
+{ "mmsi": "211476060", "distance_m": 56.9, "dt_seconds": 180.0, "reach_m": 518.5,
+  "sog": 0.2, "cog": 180.0, "ping_wgs84": [25.0004, 37.0004], "ping_time": "2026-07-14T10:03:00Z" }
+```
+
+Notes: `entry_time`/`exit_time` are both the scene datetime and `duration_hours` is `null` because a
+satellite acquisition is instantaneous (no track). `fishing_*` and the GFW identity fields are `null`
+unless a `gfw_vessels.py` file is joined via `--vessels`. `violation_score` ranks the list: **dark** =
+`presence_confidence`; **matched** = `presence_confidence × w`, where `w` interpolates `matched_weight`
+(fishing_probability 0) → `fishing_weight` (fishing_probability 1), and an IUU-listed vessel escalates to
+`fishing_weight`. This shape is exercised end-to-end by `scripts/tests/fixtures/` +
+`scripts/tests/test_pipeline_e2e.py`.
+
 ---
 
 ## New files, dependencies, gitignore
@@ -463,8 +521,9 @@ Build against **one** stage-1 run dir end-to-end before scaling out.
       reviewed satellite set is still tiny — 4 chips — so grow it by reviewing more runs.)*
 - [ ] **1-batch (later)** — `scan_mpas.py` to sweep all Ia/Ib marine MPAs (≤1° sub-AOIs). Needs the
       `main()`-guard refactor from `docs/AUDIT.md` P1.1 so `sat_fetch` functions are importable.
-- [ ] **violation events (later)** — join high-confidence in-MPA detections to the
-      `violation_events` schema in `CLAUDE.md`; fuse with GFW fishing-effort + AIS for scoring.
+- [x] **violation events (P3, built)** — `scripts/fuse_violations.py` joins in-MPA detections to AIS
+      (dark-vs-matched) and, via `--vessels`, to GFW identity/fishing → the `violation_events.json`
+      contract above. Remaining P3 work: `docs/PHASE3_PLAN.md`.
 
 ---
 

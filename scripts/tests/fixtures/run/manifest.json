@@ -1,0 +1,7 @@
+{
+  "provider": "pc",
+  "collection": "sentinel-2-l2a",
+  "aoi_bbox_wgs84": [24.9, 36.9, 26.1, 38.1],
+  "wdpa": { "WDPAID": 555622064, "WDPA_PID": "555622064", "NAME": "Seal Rocks" },
+  "scene_crs": "EPSG:32635"
+}

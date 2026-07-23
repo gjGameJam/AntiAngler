@@ -116,6 +116,69 @@ class TestInsights(unittest.TestCase):
         self.assertIsNone(ins["fishing_in_no_take_mpa"])
 
 
+class TestRegionFiltering(unittest.TestCase):
+    """MPA-specific fishing_probability (PHASE3_PLAN 3A) — client-side position filtering."""
+
+    def test_point_in_bbox(self):
+        bbox = (24.9, 36.9, 26.1, 38.1)
+        self.assertTrue(gv.point_in_bbox(25.0, 37.0, bbox))
+        self.assertFalse(gv.point_in_bbox(30.0, 37.0, bbox))
+
+    def test_event_position_shapes(self):
+        self.assertEqual(gv.event_position({"position": {"lat": 37.0, "lon": 25.0}}), (25.0, 37.0))
+        self.assertEqual(gv.event_position({"lat": 37.0, "lon": 25.0}), (25.0, 37.0))
+        self.assertIsNone(gv.event_position({"type": "fishing"}))   # no position -> None
+
+    def test_region_filter_keeps_only_in_mpa_events(self):
+        bbox = (24.9, 36.9, 26.1, 38.1)
+        resp = {"entries": [
+            {"type": "fishing", "durationHours": 2.0, "position": {"lat": 37.0, "lon": 25.0}},   # in
+            {"type": "fishing", "durationHours": 5.0, "position": {"lat": 10.0, "lon": 10.0}},   # out
+        ]}
+        s = gv.summarize_fishing(resp, region_bbox=bbox)
+        self.assertTrue(s["region_filtered"])
+        self.assertEqual(s["fishing_event_count"], 1)
+        self.assertAlmostEqual(s["fishing_hours"], 2.0, places=3)
+        self.assertEqual(s["fishing_probability"], 1.0)
+        # a vessel that only fished OUTSIDE the MPA -> probability 0 under region filtering
+        out_only = gv.summarize_fishing({"entries": [
+            {"type": "fishing", "durationHours": 5.0, "position": {"lat": 10.0, "lon": 10.0}}]}, region_bbox=bbox)
+        self.assertEqual(out_only["fishing_probability"], 0.0)
+
+    def test_region_filter_falls_back_when_no_positions(self):
+        # region requested but events carry no position -> skip filter (degrade to window prior)
+        resp = {"entries": [{"type": "fishing", "durationHours": 3.0}]}
+        s = gv.summarize_fishing(resp, region_bbox=(24.9, 36.9, 26.1, 38.1))
+        self.assertFalse(s["region_filtered"])
+        self.assertEqual(s["fishing_probability"], 1.0)
+        self.assertAlmostEqual(s["fishing_hours"], 3.0, places=3)
+
+    def test_no_region_is_unchanged(self):
+        resp = {"entries": [{"type": "fishing", "durationHours": 1.0, "position": {"lat": 0, "lon": 0}}]}
+        s = gv.summarize_fishing(resp)   # no region_bbox
+        self.assertFalse(s["region_filtered"])
+        self.assertEqual(s["fishing_event_count"], 1)
+
+    def test_resolve_region_bbox_and_conflict(self):
+        class A:
+            region_bbox = [24.9, 36.9, 26.1, 38.1]
+            wdpa_id = wdpa_pid = None
+            gpkg = None
+        bbox, label = gv.resolve_region_bbox(A())
+        self.assertEqual(bbox, (24.9, 36.9, 26.1, 38.1))
+        self.assertEqual(label, "bbox")
+        A.wdpa_id = 555
+        with self.assertRaises(RuntimeError):   # both provided
+            gv.resolve_region_bbox(A())
+
+    def test_resolve_region_bbox_none(self):
+        class A:
+            region_bbox = None
+            wdpa_id = wdpa_pid = None
+            gpkg = None
+        self.assertEqual(gv.resolve_region_bbox(A()), (None, None))
+
+
 class TestWindowAndRecord(unittest.TestCase):
     def test_resolve_window_defaults_7_days(self):
         start, end = gv.resolve_window(None, "2026-07-22")

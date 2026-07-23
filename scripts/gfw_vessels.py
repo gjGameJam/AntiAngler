@@ -14,7 +14,9 @@ except ImportError:                  # keep the module importable (and offline-t
 # - Take a set of MMSIs (explicit --mmsi, or pulled from a fuse_violations violation_events.json
 #   via --from-events, or an AIS positions file via --from-ais)
 # - Resolve each to GFW vessel IDENTITY (Vessels search: vesselId, shipname, flag, geartype, imo)
-# - Summarize its recent FISHING activity (Events API: fishing_hours + a coarse fishing_probability)
+# - Summarize its recent FISHING activity (Events API: fishing_hours + a coarse fishing_probability;
+#   with --region-bbox / --wdpa-id the fishing events are filtered to the MPA, so fishing_probability
+#   means "fished IN the MPA" rather than "fished anywhere in the window")
 # - OPTIONALLY (--insights) pull GFW Vessel Insights (IUU-list flag, AIS-off/gap events, apparent
 #   fishing in no-take MPAs)
 # - NORMALIZE all of that into the project's vessel-records contract and write it to
@@ -77,6 +79,19 @@ def parse_args(argv=None):
     p.add_argument("--insights", action="store_true", default=bool(env_or("GFWV_INSIGHTS", "")),
                    help="Also call the GFW Vessel Insights API (IUU-list flag, AIS-off/gap events, "
                         "apparent fishing in no-take MPAs). Optional; off by default.")
+    reg = p.add_argument_group("MPA region (optional — makes fishing_probability MPA-specific)")
+    reg.add_argument("--region-bbox", type=float, nargs=4,
+                     metavar=("MINLON", "MINLAT", "MAXLON", "MAXLAT"), default=None,
+                     help="WGS84 bbox of the MPA. Fishing events are then filtered to those INSIDE it, "
+                          "so fishing_probability means 'fished in the MPA' not 'fished anywhere in the "
+                          "window'. Mutually exclusive with --wdpa-id/--wdpa-pid.")
+    reg.add_argument("--wdpa-id", type=float, default=(lambda v: float(v) if v else None)(env_or("GFWV_WDPA_ID", None)),
+                     help="Resolve the region bbox from the GeoPackage by WDPAID (needs geopandas).")
+    reg.add_argument("--wdpa-pid", default=env_or("GFWV_WDPA_PID", None),
+                     help="Resolve the region bbox from the GeoPackage by WDPA_PID.")
+    reg.add_argument("--gpkg", type=Path, default=Path(env_or("GFWV_GPKG",
+                        str(REPO_ROOT / "data" / "processed" / "wdpa_marine_ia_ib.gpkg"))),
+                     help="MPA GeoPackage to resolve --wdpa-id/--wdpa-pid against.")
     p.add_argument("--dataset-identity", default=env_or("GFWV_DATASET_IDENTITY",
                                                         "public-global-vessel-identity:latest"))
     p.add_argument("--dataset-events", default=env_or("GFWV_DATASET_EVENTS",
@@ -131,6 +146,40 @@ def collect_mmsis(args):
     if args.from_ais:
         add(mmsis_from_ais(json.loads(Path(args.from_ais).read_text())))
     return ordered
+
+
+def resolve_region_bbox(args):
+    """Optional MPA region bbox from --region-bbox (pure) or an --wdpa-id/--wdpa-pid lookup
+    (lazy geopandas, mirrors sat_fetch/aisstream_fetch). Returns (bbox|None, label|None)."""
+    has_bbox = getattr(args, "region_bbox", None) is not None
+    has_wdpa = getattr(args, "wdpa_id", None) is not None or getattr(args, "wdpa_pid", None) is not None
+    if has_bbox and has_wdpa:
+        raise RuntimeError("Provide either --region-bbox or --wdpa-id/--wdpa-pid, not both.")
+    if has_bbox:
+        b = tuple(float(x) for x in args.region_bbox)
+        if not (b[0] < b[2] and b[1] < b[3]):
+            raise RuntimeError(f"Bad --region-bbox (need minLon<maxLon and minLat<maxLat): {b}")
+        return b, "bbox"
+    if has_wdpa:
+        return bbox_from_wdpa(args.gpkg, args.wdpa_id, args.wdpa_pid)
+    return None, None
+
+
+def bbox_from_wdpa(gpkg, wdpa_id, wdpa_pid):
+    import geopandas as gpd  # heavy dep; only for the MPA-lookup path
+    if not Path(gpkg).exists():
+        raise RuntimeError(f"GeoPackage not found: {gpkg}")
+    gdf = gpd.read_file(gpkg)
+    if wdpa_id is not None:
+        sel = gdf[gdf["WDPAID"] == float(wdpa_id)]
+        key = f"WDPAID={wdpa_id}"
+    else:
+        sel = gdf[gdf["WDPA_PID"].astype(str) == str(wdpa_pid)]
+        key = f"WDPA_PID={wdpa_pid}"
+    if sel.empty:
+        raise RuntimeError(f"No MPA matching {key} in {gpkg}")
+    minx, miny, maxx, maxy = (float(v) for v in sel.total_bounds)
+    return (minx, miny, maxx, maxy), str(sel.iloc[0]["NAME"])
 
 
 # --------------------------------------------------------------------------- pure: normalization
@@ -219,19 +268,51 @@ def event_duration_hours(entry):
     return 0.0
 
 
-def summarize_fishing(events_json):
-    """GFW Events response -> {fishing_hours, fishing_event_count, fishing_probability}. Counts only
-    fishing-type events. fishing_probability is a COARSE, transparent prior: 1.0 if the vessel had
-    any fishing event in the queried window, else 0.0 (None only if there were no entries at all to
-    judge from is impossible here - an empty list is a real 'no fishing' answer, so 0.0)."""
+def point_in_bbox(lon, lat, bbox):
+    """Is (lon,lat) inside the WGS84 bbox (minLon, minLat, maxLon, maxLat)?"""
+    min_lon, min_lat, max_lon, max_lat = bbox
+    return min_lon <= lon <= max_lon and min_lat <= lat <= max_lat
+
+
+def event_position(entry):
+    """(lon, lat) of a GFW event, or None. Tolerant of `position:{lat,lon}`, flat `lat`/`lon`,
+    or a `[lon,lat]`/`[lat,lon]`-ambiguous coordinate is NOT guessed (returns None)."""
+    pos = entry.get("position") or entry.get("center") or {}
+    lat = _first(pos.get("lat"), pos.get("latitude"), entry.get("lat"), entry.get("latitude"))
+    lon = _first(pos.get("lon"), pos.get("lng"), pos.get("longitude"), entry.get("lon"), entry.get("longitude"))
+    if lat is None or lon is None:
+        return None
+    try:
+        return float(lon), float(lat)
+    except (TypeError, ValueError):
+        return None
+
+
+def summarize_fishing(events_json, region_bbox=None):
+    """GFW Events response -> {fishing_hours, fishing_event_count, fishing_probability, region_filtered}.
+    Counts only fishing-type events. fishing_probability is a COARSE, transparent prior: 1.0 if the
+    vessel had any (in-scope) fishing event in the queried window, else 0.0.
+
+    region_bbox (optional, minLon,minLat,maxLon,maxLat) makes the signal MPA-SPECIFIC by keeping only
+    fishing events whose position falls inside it, so fishing_probability means "fished IN the MPA"
+    rather than "fished anywhere in the window". Graceful fallback: if a region is requested but NONE
+    of the fishing events carry a parseable position, the filter is skipped (region_filtered=false) so
+    a shape mismatch degrades to the window-level prior instead of silently zeroing the signal."""
     entries = events_json.get("entries", events_json) if isinstance(events_json, dict) else events_json
     if not isinstance(entries, list):
-        return {"fishing_hours": None, "fishing_event_count": None, "fishing_probability": None}
+        return {"fishing_hours": None, "fishing_event_count": None,
+                "fishing_probability": None, "region_filtered": False}
     fishing = [e for e in entries if isinstance(e, dict)
                and str(e.get("type", "fishing")).lower() == "fishing"]
+    region_filtered = False
+    if region_bbox is not None and fishing:
+        positioned = [(e, event_position(e)) for e in fishing]
+        if any(p is not None for _, p in positioned):   # only filter if positions are actually present
+            fishing = [e for e, p in positioned if p is not None and point_in_bbox(p[0], p[1], region_bbox)]
+            region_filtered = True
     hours = round(sum(event_duration_hours(e) for e in fishing), 3)
     return {"fishing_hours": hours, "fishing_event_count": len(fishing),
-            "fishing_probability": 1.0 if fishing else 0.0}
+            "fishing_probability": 1.0 if fishing else 0.0, "region_filtered": region_filtered}
 
 
 def _any_truthy(o):
@@ -321,6 +402,7 @@ def build_vessel_record(identity, fishing, insights):
         "fishing_hours": fishing.get("fishing_hours"),
         "fishing_event_count": fishing.get("fishing_event_count"),
         "fishing_probability": fishing.get("fishing_probability"),
+        "fishing_region_filtered": fishing.get("region_filtered", False),
     })
     if insights is not None:
         rec.update({
@@ -391,16 +473,19 @@ def vessel_insights(token, vessel_id, dataset_identity, start, end):
     return r.json()
 
 
-def resolve_one(token, mmsi, args, start, end):
+def resolve_one(token, mmsi, args, start, end, region_bbox=None):
     """Full per-MMSI resolution: identity -> fishing -> (optional) insights -> merged record.
-    Any single sub-call failing is caught and logged so one bad MMSI doesn't abort the batch."""
+    Any single sub-call failing is caught and logged so one bad MMSI doesn't abort the batch.
+    region_bbox (optional) filters fishing events to the MPA so fishing_probability is MPA-specific."""
     identity = normalize_identity(search_vessel(token, mmsi, args.dataset_identity, args.limit), mmsi)
     vessel_id = identity.get("vessel_id")
-    fishing = {"fishing_hours": None, "fishing_event_count": None, "fishing_probability": None}
+    fishing = {"fishing_hours": None, "fishing_event_count": None,
+               "fishing_probability": None, "region_filtered": False}
     insights = None
     if vessel_id:
         try:
-            fishing = summarize_fishing(fishing_events(token, vessel_id, args.dataset_events, start, end))
+            fishing = summarize_fishing(
+                fishing_events(token, vessel_id, args.dataset_events, start, end), region_bbox)
         except Exception as exc:   # noqa: BLE001 - one vessel's failure must not kill the run
             print(f"  MMSI {mmsi}: fishing lookup failed: {exc}")
         if args.insights:
@@ -419,10 +504,14 @@ def main(argv=None):
         raise RuntimeError("No MMSIs. Provide --mmsi 1,2,3 and/or --from-events <violation_events.json> "
                            "and/or --from-ais <positions.json>.")
     start, end = resolve_window(args.start, args.end)
+    region_bbox, region_label = resolve_region_bbox(args)
 
     print("GFW VESSELS:")
     print(f"  mmsis={len(mmsis)}  window={start}..{end}  insights={args.insights}")
     print(f"  identity_dataset={args.dataset_identity}  events_dataset={args.dataset_events}")
+    if region_bbox is not None:
+        print(f"  region={region_label} bbox={tuple(round(v, 5) for v in region_bbox)} "
+              f"(fishing_probability filtered to the MPA)")
 
     if args.dry_run:
         print("  DRY RUN — planned per-MMSI requests (not sent):")
@@ -431,6 +520,8 @@ def main(argv=None):
               f"&start-date={start}&end-date={end}")
         if args.insights:
             print(f"    POST {GFW_BASE}/v3/insights/vessels  (vesselId, {start}..{end})")
+        if region_bbox is not None:
+            print(f"    (fishing events client-side filtered to region bbox {tuple(round(v,5) for v in region_bbox)})")
         print(f"  mmsis: {', '.join(mmsis)}")
         return 0
 
@@ -443,13 +534,13 @@ def main(argv=None):
     records = []
     for mmsi in mmsis:
         try:
-            rec = resolve_one(token, mmsi, args, start, end)
+            rec = resolve_one(token, mmsi, args, start, end, region_bbox)
         except Exception as exc:   # noqa: BLE001 - identity failure for one MMSI: log + emit a stub
             print(f"  MMSI {mmsi}: identity lookup failed: {exc}")
             rec = build_vessel_record({"mmsi": str(mmsi), "vessel_id": None, "shipname": None,
                                        "flag": None, "geartype": None, "imo": None, "callsign": None},
                                       {"fishing_hours": None, "fishing_event_count": None,
-                                       "fishing_probability": None}, None)
+                                       "fishing_probability": None, "region_filtered": False}, None)
         records.append(rec)
         print(f"  {mmsi}: name={rec.get('shipname')} flag={rec.get('flag')} "
               f"gear={rec.get('geartype')} fishing_h={rec.get('fishing_hours')}")
@@ -462,6 +553,7 @@ def main(argv=None):
         "source": "gfw",
         "window": {"start": start, "end": end},
         "insights": args.insights,
+        "region": {"label": region_label, "bbox_wgs84": list(region_bbox)} if region_bbox else None,
         "vessel_count": len(records),
         "vessels": records,   # <- the vessel-records contract fuse_violations.py --vessels reads
     }
