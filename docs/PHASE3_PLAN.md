@@ -31,6 +31,15 @@ is what "finish Phase 3" means, and it drives the ordering below.
 
 ## Workstream 1 — Live validation (do first; everything else assumes the calls work)
 
+> **Environment note (2026-07-23): live validation cannot run in the Claude Code web/remote sandbox.**
+> The egress policy blocks all three service hosts at CONNECT (`gateway.api.globalfishingwatch.org`,
+> `stream.aisstream.io`, `api-doc.globalfishingwatch.org` → 403 / unreachable), and no
+> `AISSTREAM_API_KEY` / `GFW_API_TOKEN` is present. So even an unauthenticated path-existence probe
+> (expecting 401) is impossible here — the gateway never accepts the tunnel. **Run 1A–1C from a machine
+> (or an environment whose network policy allowlists these hosts) with the key + token set.** The
+> endpoint paths below follow GFW's documented v3 API and the parsers are drift-tolerant; 1B is the
+> checklist to confirm them against a real response.
+
 ### 1A. AISStream live run  ☐
 - **Do:** register a free key at https://aisstream.io → `AISSTREAM_API_KEY` in `.env`;
   `pip install -r requirements-ais.txt`; run `aisstream_fetch.py --bbox <a busy strait> --duration 120`.
