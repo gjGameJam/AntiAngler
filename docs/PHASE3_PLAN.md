@@ -98,7 +98,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
 >   ingesters, so its live validation waits on Workstream 1. Neither item depends on the Phase 2 SAR
 >   training (that is an alternative detection modality). Net: build both here; defer only 2A's live run.
 
-### 2A. Per-MPA batch driver — `scripts/scan_violations.py`  ☐
+### 2A. Per-MPA batch driver — `scripts/scan_violations.py`  ✅ DONE (2026-07-23, code+tests; live run still 🏠)
 - **Do:** a thin orchestrator that, given a `--wdpa-id` (or a list), runs
   sat_fetch → detect_boats → fuse_violations against a concurrently-captured AIS file, then optionally
   gfw_vessels + re-fuse. Reuses each script's `main(argv)` (all are now import-safe / argv-guarded).
@@ -143,7 +143,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
   like the GFW/AIS ones.
 - **Effort:** M (gated on API access).
 
-### 3C. Historical AIS source (unblock non-real-time fusion)  ☐
+### 3C. Historical AIS source — `scripts/marinecadastre_fetch.py`  ✅ DONE (2026-07-23, normalizer+tests; download still 🏠)
 - **Problem:** AISStream is live-only, so historical scenes can't be fused from it.
 - **Do:** a sibling ingester normalizing a **free historical** archive into the AIS contract. Best free
   option: **NOAA MarineCadastre** (US coastal, historical, CSV) → `scripts/marinecadastre_fetch.py`,
@@ -168,7 +168,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
   sketch predate the implementation; pin the actual shape so downstream (2B, dashboards) can rely on it.
 - **Effort:** S.
 
-### 4C. Consolidate env/deps notes  ☐
+### 4C. Consolidate env/deps notes  ✅ DONE (2026-07-23) — `CLAUDE.md` 'Phase 3 first-run setup' table
 - **Do:** one place listing the P3 env vars (`AISSTREAM_API_KEY`, `GFW_API_TOKEN`) and the
   `requirements-ais.txt` install step, so first-run setup is a single reference.
 - **Effort:** S.
@@ -180,9 +180,9 @@ is what "finish Phase 3" means, and it drives the ordering below.
 - [ ] AISStream + GFW calls verified live once; any v3 shape drift fixed in the (isolated) parsers (1A, 1B).
 - [ ] One real MPA yields a spot-checked `violation_events.json` — a confirmed dark and a confirmed matched (1C).
 - [x] `fishing_probability` is MPA-specific (3A — `--region-bbox`/`--wdpa-id`; live GFW call still 🏠).
-- [ ] A batch driver runs the loop for a `--wdpa-id` (2A).
+- [x] A batch driver runs the loop for a `--wdpa-id` (2A — `scan_violations.py`; live run still 🏠).
 - [x] An operator-facing ranked output exists (2B — `report_violations.py`).
-- [ ] *(Optional, strengthens the product)* Skylight cross-check (3B) and/or historical AIS (3C).
+- [x] Historical AIS (3C — `marinecadastre_fetch.py`).  Optional remaining: Skylight cross-check (3B).
 
 ## Recommended sequence
 
