@@ -238,6 +238,55 @@ survives. The product cares about *mismatch precision* (which fusion improves), 
 
 ---
 
+## Remaining TODO items (consolidated, 2026-07-23)
+
+The technical pipeline (Phases 0/2/3) is built and offline-tested (81 tests). What's left is grouped by
+what it needs. This consolidates the gaps flagged in the Executive Summary (`CLAUDE.md` → "Implementation
+status"), the phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLAN.md`, and `docs/AUDIT.md`
+— read those for detail; this is the single index.
+
+### 🏠 Do-from-home (need credentials / GPU — cannot run in the remote sandbox)
+- **Live-validate the AISStream + GFW calls + produce a first real violation.** Top priority — it
+  unblocks trust in the whole chain. `docs/PHASE3_PLAN.md` Workstream 1 (endpoint-verification checklist).
+- **Train the SAR detector `best_sar.pt`** (Phase 2 step 4). The reviewed SAR set
+  (`data/processed/sar_training_exports/deep/`) + the build/train flow exist; needs a GPU run + promote.
+- **Live runs** of `scan_violations.py` (batch driver) and the `marinecadastre_fetch.py --date` archive
+  download (the `--csv <local file>` path already runs offline).
+
+### 🟢 Feasible offline (buildable in the sandbox; not yet built)
+- **Alerting interface** — the Executive Summary's final promised output. Today `report_violations.py`
+  emits a ranked CSV/HTML; an alerts layer would filter high-`violation_score` / dark / IUU events into a
+  digest (JSON/markdown/console, or a watch mode). Pure stdlib over `violation_events.json`.
+- **AIS-track MPA geofencing** — flag *cooperative* vessels transmitting from inside a no-take IUCN Ia/Ib
+  MPA (AIS position ∈ MPA), independent of a satellite detection — the matched/identified counterpart to
+  the dark signal. bbox test is stdlib; precise point-in-polygon needs shapely.
+- **Local speed-based fishing heuristic** — the summary's "infer fishing via GFW *or local ML*"; only the
+  GFW path exists today. Lower priority (GFW covers it); a speed/loitering heuristic removes the GFW
+  dependency for the fishing signal.
+- **Cross-modality S1×S2 validation** — `docs/IMPROVEMENT_PLAN.md` S7: confirm SAR flags dark/large
+  vessels the optical detector missed under cloud/night.
+- **Skylight dark-call cross-check** — `docs/PHASE3_PLAN.md` 3B (free ground-truth for our dark calls;
+  gated on Skylight API access).
+- **Detector-accuracy levers** — `docs/IMPROVEMENT_PLAN.md`: **O3** same-region hard negatives (top
+  precision lever), **O4** more diverse real positives + a 2nd small-vessel holdout (top recall lever),
+  **O6** eval hardening.
+
+### 🧹 Repo hygiene / reproducibility (`docs/AUDIT.md`, still open)
+- A cheap **CI job** — `python -m py_compile scripts/*.py` + the offline test suite; nothing exercises the
+  81 tests in CI today (only `gfw.yml` runs, and only `gfw_fetch.py`).
+- A committed **`.env.example`** listing every env var (`GFW_API_TOKEN`, `AISSTREAM_API_KEY`, `SAT_*`, …).
+- `main()`-guard + input/atomic-write hardening for `gfw_fetch.py` / `prep_polygons.py` / `view_polygons.py`;
+  network retry/backoff on the GFW + `/vsicurl` calls; pin `pandas`/`geodatasets`/`matplotlib`.
+- Cosmetic: SAR runs write under `data/raw/sentinel2/` — add a `data/raw/sentinel1/` output dir so the
+  modalities don't mix (`docs/IMPROVEMENT_PLAN.md` cross-cutting).
+
+### ⛔ Deliberately out of scope ($0-budget, local)
+The cloud-native stack in the Executive Summary's *Infrastructure Recommendations* (Kubernetes, Kafka /
+Kinesis, PostgreSQL+PostGIS, Airflow, Prometheus/Grafana) and paid data (VMS, Spire satellite AIS,
+commercial VHR/SAR per-alert tasking). Recorded as the north-star vision, not a build target.
+
+---
+
 ## Quick reference — commands & files
 
 | Task | Command / file |

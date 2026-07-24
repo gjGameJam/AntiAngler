@@ -186,6 +186,25 @@ We propose a **real-time and batch pipeline** to detect likely fishing violation
 
 **Assumptions:** We assume global AIS visibility (satellite + terrestrial) with typical delays, as well as access to open Sentinel data. We assume processing scale on the order of millions of AIS messages/day and dozens of MPA polygons. We assume MPAs and vessel registries are static or slowly updating. Retention is flexible; e.g., raw AIS ~1 year, aggregated events ~5–10 years.
 
+**Implementation status (2026-07-23) — what of this summary is realized.** The built system is a **$0-budget, local, pure-stdlib + free-API** implementation (no cloud stack — the *Infrastructure Recommendations* section below is the north-star vision, not what runs). Each capability the summary promises maps to code as follows; every unbuilt item is tracked in `docs/ROADMAP.md` → "Remaining TODO items".
+
+| Executive-summary capability | Status | Where / note |
+|---|---|---|
+| Ingest AIS feeds | ✅ built | `aisstream_fetch.py` (live), `marinecadastre_fetch.py` (historical archive) |
+| Ingest VMS | ⛔ out of scope | not public (partnership-only) |
+| Ingest GFW APIs | ✅ built | `gfw_fetch.py` (gridded effort), `gfw_vessels.py` (per-vessel identity/fishing/Insights) |
+| Preprocess AIS *tracks* (clean/interpolate/index) | ⬜ not built | superseded by the **detection-centric** reframe — we fuse instantaneous *positions*, not reconstructed tracks (ROADMAP TODO) |
+| Intersect positions with MPA geofences | ◑ partial | detections tagged `inside_mpa` (`detect_boats.py`); geofencing *AIS-reported* vessels is a ROADMAP TODO |
+| Infer fishing activity | ✅ (GFW) | `gfw_vessels.py` `fishing_hours` + `fishing_probability`; a local speed-based heuristic is a ROADMAP TODO |
+| Cross-reference vessel identity | ✅ built | `gfw_vessels.py` (MMSI→name/flag/gear/imo, IUU flag) |
+| Score each violation event | ✅ built | `fuse_violations.py` `violation_score` (see the corrected formula under *Geofence Intersection & Event Detection*) |
+| Validate with satellite imagery | ✅ built | `sat_fetch.py` + `detect_boats.py` (S2 optical live; S1 SAR provider built, detector `best_sar.pt` pending); cross-modality S1×S2 is a ROADMAP TODO |
+| Ranked list of events + evidence/confidence | ✅ built | `report_violations.py` (ranked CSV + self-contained HTML); one-shot via `scan_violations.py` |
+| Alerting interface | ⬜ not built | ROADMAP TODO (feasible offline over `violation_events.json`) |
+| Cloud-native deploy / monitoring / scale | ⛔ out of scope | deliberately not pursued ($0-budget, local) — *Infrastructure Recommendations* is aspirational |
+
+**Live-validation** of the AISStream/GFW calls and the **SAR detector** are 🏠 do-from-home (need credentials / GPU); see `docs/PHASE3_PLAN.md` and `docs/ROADMAP.md` → "Remaining TODO items".
+
 ---
 
 # Data Sources and Access Methods
@@ -227,10 +246,16 @@ Data Ingestion → Processing → Event Detection → Satellite Validation → O
 - `fishing_hours`, `fishing_probability`, `violation_score`
 - `evidence` — list of data sources confirming the event (e.g. `["AIS", "GFW", "Sentinel-2"]`)
 
-**Scoring:**
+**Scoring — original proposal formula (kept for the record):**
 ```
 violation_score = presence_confidence * fishing_probability * (fishing_hours / (duration_hours + ε))
 ```
+
+**Scoring — as actually implemented in `fuse_violations.py`.** A satellite acquisition is instantaneous, so there is no track `duration_hours` (it is `null`) and the formula above is **not computable** here — it is *not* what runs. Instead:
+- **dark** (in-MPA detection with no AIS match) → `violation_score = presence_confidence` (the product signal).
+- **matched** (AIS-identified) → `presence_confidence × w`, where `w` interpolates `--matched-weight` (fishing_probability 0) → `--fishing-weight` (fishing_probability 1); an IUU-listed vessel escalates to `--fishing-weight`.
+
+`fishing_probability` / `fishing_hours` are filled only by the optional GFW join (`gfw_vessels.py` → `fuse_violations.py --vessels`); without it they are `null` and matched events score at `matched_weight`. The authoritative emitted schema is pinned in `docs/PIPELINE.md`.
 
 ---
 
