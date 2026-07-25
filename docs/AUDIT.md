@@ -45,12 +45,12 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
    **Fix:** `requests.Session` + `urllib3.util.Retry` for GFW; add `GDAL_HTTP_MAX_RETRY=3` /
    `GDAL_HTTP_RETRY_DELAY=2` to `sat_fetch._gdal_env` for the `/vsicurl` reads.
 
-5. **CI runs no lint/compile/test** (PARTLY ADDRESSED). An **offline test suite now exists**
-   (`scripts/tests/`, 81 tests covering the P3 stages — pure stdlib, no network/key/ML deps), but
-   **CI still doesn't run it**: `gfw.yml` only runs `gfw_fetch.py`, so a syntax error in any other
-   script — or a P3 regression — ships undetected.
-   **Fix:** add a cheap job — `python -m py_compile scripts/*.py` + `python -m unittest discover -s
-   scripts/tests -p 'test_*.py'` (optionally `ruff check`). No credentials needed, so it's free coverage.
+5. **CI runs no lint/compile/test** — ✅ **DONE (2026-07-23).** `.github/workflows/tests.yml` runs on
+   every push + PR: `python -m compileall -q scripts` (syntax gate for the whole repo, including the
+   heavy ML/geo scripts — compileall parses, doesn't import) + `python -m unittest discover -s
+   scripts/tests` (the 89-test offline suite). Pure stdlib, no credentials/deps — free coverage. A
+   syntax error in any script or a P3 regression now fails CI instead of shipping. (`ruff check` could
+   be added later as an optional lint step.)
 
 6. **No `.env.example`.** The env surface (`GFW_API_TOKEN`, `PC_SDK_SUBSCRIPTION_KEY`, all `GFW_*` and
    `SAT_*` fallbacks) is only described in prose. **Fix:** add a committed `.env.example` listing every
@@ -81,7 +81,5 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 ---
 
 ### Suggested order of attack
-P1.1 (main guard) is done for `sat_fetch`; **the highest-value open items now are #5 (wire the existing
-81-test suite into CI) and #6 (`.env.example`)** — quick reproducibility wins, one PR. Then #2
-(`prep_polygons` hardening) and #4 (network retry). #7–#11 are conscious house-style trade-offs; leave.
+P1.1 (main guard) is done for `sat_fetch`; **the highest-value open item now is #6 (`.env.example`)** — quick reproducibility wins, one PR. Then #2 (`prep_polygons` hardening) and #4 (network retry). #7–#11 are conscious house-style trade-offs; leave.
 These items are also indexed under `docs/ROADMAP.md` → "Remaining TODO items" (🧹 hygiene).

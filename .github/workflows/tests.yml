@@ -1,0 +1,33 @@
+name: Tests
+
+# Cheap, credential-free CI: byte-compile every script (syntax gate for the whole repo, including
+# the heavy ML/geo scripts — compileall parses, it does not import) and run the offline P3 test
+# suite. Addresses AUDIT.md #5. Runs on every push + PR so a syntax error or a P3 regression is
+# caught before it ships (the daily gfw.yml only exercises gfw_fetch.py).
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # No `pip install`: the P3 test suite is pure stdlib. fuse_violations / report_violations /
+      # scan_violations / marinecadastre_fetch are stdlib-only; aisstream_fetch / gfw_vessels
+      # soft-import python-dotenv and lazy-import requests/websocket-client, so importing them (and
+      # running the tests) needs none of those. Keep it that way — do not add heavy deps here.
+      - name: Byte-compile all scripts (syntax check)
+        run: python -m compileall -q scripts
+
+      - name: Run offline test suite
+        run: python -m unittest discover -s scripts/tests -p 'test_*.py' -v

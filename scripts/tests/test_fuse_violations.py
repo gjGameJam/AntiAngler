@@ -5,6 +5,7 @@ asserts the dark/matched verdicts. Run either of:
     python scripts/tests/test_fuse_violations.py
     python -m unittest scripts.tests.test_fuse_violations
 """
+import csv
 import json
 import sys
 import tempfile
@@ -44,6 +45,16 @@ def make_ais(tmp, pings):
 def make_vessels(tmp, vessels):
     path = Path(tmp) / "vessels.json"
     path.write_text(json.dumps({"vessels": vessels}))
+    return path
+
+
+def make_ais_csv(tmp, rows, header=("mmsi", "lon", "lat", "timestamp", "sog", "cog")):
+    path = Path(tmp) / "ais.csv"
+    with path.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(header)
+        for r in rows:
+            w.writerow(r)
     return path
 
 
@@ -253,6 +264,85 @@ class TestVesselEnrichment(unittest.TestCase):
         self.assertAlmostEqual(m["violation_score"], 0.2, places=4)
         self.assertIsNone(m["vessel_name"])
         self.assertNotIn("GFW", m["evidence"])
+
+
+class TestAisInputAndEdges(unittest.TestCase):
+    """The AIS input contract (CSV, field aliases, bad rows) + the velocity-gate fallback and edge
+    cases — the paths the four verification cases don't isolate."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self._tmp = self._td.name
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _one_det(self, ais_path, conf=0.9, centroid=(25.0, 37.0), extra=None):
+        run = make_run(self._tmp, [{"confidence": conf, "centroid_wgs84": list(centroid),
+                                    "bbox_wgs84": [centroid[0], centroid[1], centroid[0] + 0.001, centroid[1] + 0.001],
+                                    "inside_mpa": True}])
+        doc = run_fuse(run, ais_path, extra)
+        return doc, by_detection(doc)
+
+    def test_csv_ais_input(self):
+        # The documented --ais .csv contract (header row), not just JSON.
+        csvp = make_ais_csv(self._tmp, [["111", "25.0005", "37.0005", "2026-07-14T10:00:00Z", "0.1", "90"]])
+        _, ev = self._one_det(csvp)
+        self.assertEqual(ev["det_00000"]["ais_status"], "matched")
+        self.assertEqual(ev["det_00000"]["mmsi"], "111")
+
+    def test_missing_sog_uses_max_speed_fallback(self):
+        # Ping ~5 km away, 10 min before acquisition, with NO sog -> matches ONLY via the 25 kn
+        # max-speed envelope (a fixed small radius, or sog=0, would miss it). This isolates the fallback.
+        ais = make_ais(self._tmp, [{"mmsi": 222, "lon": 25.05625, "lat": 37.0,
+                                    "timestamp": "2026-07-14T09:50:00Z"}])   # sog omitted
+        _, ev = self._one_det(ais)
+        m = ev["det_00000"]
+        self.assertEqual(m["ais_status"], "matched")
+        self.assertIsNone(m["ais_match"]["sog"])                 # ping carried no sog
+        self.assertGreater(m["ais_match"]["distance_m"], 4000)   # far beyond the 500 m slack — only speed*dt reaches
+
+    def test_missing_sog_beyond_reach_is_dark(self):
+        # Same ping but ~12 km away -> beyond the 25 kn / 10 min feasible envelope -> dark.
+        ais = make_ais(self._tmp, [{"mmsi": 222, "lon": 25.135, "lat": 37.0,
+                                    "timestamp": "2026-07-14T09:50:00Z"}])
+        _, ev = self._one_det(ais)
+        self.assertEqual(ev["det_00000"]["ais_status"], "dark")
+
+    def test_field_aliases_and_skips_bad_rows(self):
+        # Contract tolerates MMSI/longitude/latitude/time_utc/Sog; an unusable row is skipped, not fatal.
+        ais = make_ais(self._tmp, [
+            {"MMSI": 333, "longitude": 25.0005, "latitude": 37.0005,
+             "time_utc": "2026-07-14T10:00:00Z", "Sog": 0.1},
+            {"foo": 1}])
+        _, ev = self._one_det(ais)
+        self.assertEqual(ev["det_00000"]["ais_status"], "matched")
+        self.assertEqual(ev["det_00000"]["mmsi"], "333")
+
+    def test_min_conf_drops_low_confidence(self):
+        run = make_run(self._tmp, [
+            {"confidence": 0.9, "centroid_wgs84": [25.0, 37.0],
+             "bbox_wgs84": [25.0, 37.0, 25.001, 37.001], "inside_mpa": True},
+            {"confidence": 0.1, "centroid_wgs84": [25.2, 37.2],
+             "bbox_wgs84": [25.2, 37.2, 25.201, 37.201], "inside_mpa": True}])
+        doc = run_fuse(run, make_ais(self._tmp, []), ["--min-conf", "0.5"])
+        self.assertEqual(doc["counts"]["in_scope"], 1)   # the 0.1 detection dropped before fusing
+
+    def test_empty_ais_all_dark(self):
+        doc, ev = self._one_det(make_ais(self._tmp, []))
+        self.assertEqual(ev["det_00000"]["ais_status"], "dark")
+        self.assertAlmostEqual(ev["det_00000"]["violation_score"], 0.9, places=4)
+
+    def test_missing_scene_datetime_raises(self):
+        run = Path(self._tmp) / "run_nodt"
+        run.mkdir()
+        (run / "detections.json").write_text(json.dumps({
+            "count": 1, "scene": {}, "wdpa": None,
+            "detections": [{"detection_id": "det_00000", "confidence": 0.9, "centroid_wgs84": [25, 37],
+                            "bbox_wgs84": [25, 37, 25.001, 37.001], "inside_mpa": True, "chip": "c.tif"}]}))
+        (run / "manifest.json").write_text(json.dumps({"provider": "pc"}))
+        with self.assertRaises(RuntimeError):
+            fv.main(["--run", str(run), "--ais", str(make_ais(self._tmp, []))])
 
 
 if __name__ == "__main__":

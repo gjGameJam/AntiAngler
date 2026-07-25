@@ -15,16 +15,16 @@ precision*, which the fusion improves.
 
 | Stage | Script | Output | Tests |
 |---|---|---|---|
-| AIS ingest | `aisstream_fetch.py` | `data/raw/ais/ais_positions_*.json` | `test_aisstream_fetch.py` (19) |
-| Fusion (matcher) | `fuse_violations.py` | `violation_events.json` + dark `.geojson` | `test_fuse_violations.py` (15) |
+| AIS ingest | `aisstream_fetch.py` | `data/raw/ais/ais_positions_*.json` | `test_aisstream_fetch.py` (20) |
+| Fusion (matcher) | `fuse_violations.py` | `violation_events.json` + dark `.geojson` | `test_fuse_violations.py` (22) |
 | GFW identity/fishing | `gfw_vessels.py` (+ `--region` MPA filter, 3A) | `data/raw/gfw_vessels/*.json` | `test_gfw_vessels.py` (23) |
-| Enrichment join | `fuse_violations.py --vessels` | enriched `violation_events.json` | (in the 15 above) |
+| Enrichment join | `fuse_violations.py --vessels` | enriched `violation_events.json` | (in the 22 above) |
 | Operator output (2B) | `report_violations.py` | ranked CSV + self-contained HTML | `test_report_violations.py` (9) |
 | Batch driver (2A) | `scan_violations.py` | sequences the stages | `test_scan_violations.py` (5) |
 | Historical AIS (3C) | `marinecadastre_fetch.py` | archive CSV → AIS contract | `test_marinecadastre_fetch.py` (7) |
 | Contract guard (4A) | `scripts/tests/fixtures/` | — | `test_pipeline_e2e.py` (3) |
 
-**81 offline tests**, no network / key / ML deps. The `violation_events.json` schema is pinned in
+**89 offline tests**, no network / key / ML deps. The `violation_events.json` schema is pinned in
 `docs/PIPELINE.md` (4B). The full chain:
 `sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels → report_violations`
 (or one `scan_violations.py` invocation).

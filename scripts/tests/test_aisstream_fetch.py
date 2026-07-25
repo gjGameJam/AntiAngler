@@ -135,6 +135,19 @@ class TestNormalize(unittest.TestCase):
         self.assertIsNone(ais.normalize_aisstream_message(sample_message(lat=91.0)))   # AIS lat N/A
         self.assertIsNone(ais.normalize_aisstream_message(sample_message(lon=181.0)))
 
+    def test_class_b_position_report_fallback(self):
+        # Real streams also emit StandardClassBPositionReport (smaller vessels); the normalizer must
+        # fall back to it for Sog/Cog while taking mmsi/lat/lon/time from MetaData.
+        msg = {"MessageType": "StandardClassBPositionReport",
+               "MetaData": {"MMSI": 444, "ShipName": "CLASS-B", "latitude": 37.0, "longitude": 25.0,
+                            "time_utc": "2026-07-14 10:00:00.1 +0000 UTC"},
+               "Message": {"StandardClassBPositionReport": {"Sog": 6.1, "Cog": 88.0, "UserID": 444}}}
+        rec = ais.normalize_aisstream_message(msg)
+        self.assertEqual(rec["mmsi"], "444")
+        self.assertEqual(rec["lat"], 37.0)
+        self.assertEqual(rec["sog"], 6.1)
+        self.assertEqual(rec["cog"], 88.0)
+
     def test_dedup_latest_keeps_newest_per_mmsi(self):
         recs = [
             {"mmsi": "1", "timestamp": "2026-07-14T10:00:00Z"},
