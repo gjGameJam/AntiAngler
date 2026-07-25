@@ -1,8 +1,9 @@
 # ROADMAP — improving the detector & building the MPA-violation product
 
-_Snapshot: 2026-07-14. Durable handoff for Phases 0(remainder)–3. Read `docs/STATUS.md` first
-(live model, per-run eval numbers, open problems), then this. Original research/rationale:
-`~/.claude/plans/what-will-actually-improve-swirling-truffle.md` (user machine, not in repo)._
+_Snapshot: 2026-07-14 (O5/O6 eval refresh 2026-07-25). Durable handoff for Phases 0(remainder)–3.
+Read `docs/STATUS.md` first (live model, per-run eval numbers, open problems), then this. Original
+research/rationale: `~/.claude/plans/what-will-actually-improve-swirling-truffle.md` (user machine, not
+in repo)._
 
 ## Where we are
 
@@ -17,6 +18,14 @@ small-vessel Med data, Cyclades 219 + Egadi 223, lifted Alonnisos held-out recal
 highest-leverage remaining move — twice. **All of Phase 0 is done, and the loop is the proven engine.**
 Next is scaling data diversity further (smaller artisanal boats, more regions, a 2nd small-vessel
 holdout to confirm the 0.67 magnitude) plus the imagery/AIS phases below.
+
+**Eval refresh (2026-07-25):** the two sandbox-runnable optical levers are now spent — `eval_holdout.py`
++ `conf_sweep.py` on the live `best.pt` confirmed the deploy point (imgsz 1024 / conf 0.15; Alonnisos
+P0.40/R0.70, Port Said P0.97/R0.69) and showed **plain imgsz 1280 is a non-win** (Port Said flat,
+Alonnisos recall 0.70→0.49 — the big-ship lift needs `--augment` TTA, not raw imgsz). conf 0.15 stays the
+F1-peak operating point. So the remaining optical accuracy work is the **data-driven O3/O4 levers**
+(same-region hard negatives + more diverse positives + a 2nd holdout), all 🏠 do-from-home
+(`docs/IMPROVEMENT_PLAN.md` O5/O6).
 
 **The remaining ceiling is physical:** at 10 m GSD a 20 m boat ≈ 2 px, near the optical information
 floor. Free model tricks are largely spent, and there is **no free global higher-resolution optical**
@@ -268,8 +277,10 @@ status"), the phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLA
 - **Skylight dark-call cross-check** — `docs/PHASE3_PLAN.md` 3B (free ground-truth for our dark calls;
   gated on Skylight API access).
 - **Detector-accuracy levers** — `docs/IMPROVEMENT_PLAN.md`: **O3** same-region hard negatives (top
-  precision lever), **O4** more diverse real positives + a 2nd small-vessel holdout (top recall lever),
-  **O6** eval hardening.
+  precision lever) and **O4** more diverse real positives + a 2nd small-vessel holdout (top recall lever)
+  are the remaining open levers — both need 🏠 fetch + GPU + human review. (**O5** inference/tiling tuning
+  and **O6** eval-harness hardening were **measured/exercised 2026-07-25**: imgsz 1024 / conf 0.15 is the
+  confirmed operating point, imgsz 1280 a non-win — see the "Where we are" eval-refresh note.)
 
 ### 🧹 Repo hygiene / reproducibility (`docs/AUDIT.md`, still open)
 - ✅ **DONE (2026-07-23)** — a cheap **CI job** (`.github/workflows/tests.yml`): `compileall` + the
@@ -296,7 +307,7 @@ commercial VHR/SAR per-alert tasking). Recorded as the north-star vision, not a 
 | Pick operating point | `conf_sweep.py --weights <run>/best.pt --imgsz 1024` |
 | Re-apply scene holdout after `build_dataset.py` | snippet in `docs/STATUS.md` (Operational recipes) |
 | Promote | `cp <run>/weights/best.pt data/training/weights/best.pt` (back up first) |
-| Detector deploy defaults | `detect_boats.py`: imgsz 1024, conf 0.20, weights → in-repo `best.pt` |
+| Detector deploy defaults | `detect_boats.py`: imgsz 1024, conf 0.15, weights → in-repo `best.pt` (confirmed 2026-07-25; imgsz 1280 is a non-win — use `--augment` for the opt-in big-ship profile) |
 | Add an imagery source | subclass `Provider` (`scripts/providers/base.py`), `register()` it (`providers/__init__.py`); copy `providers/pc.py` (optical) or `providers/s1.py` (SAR) |
 | Select a source | `sat_fetch.py --provider {pc,s1}` (default `pc`; `SAT_PROVIDER` env). `pc`=S2 optical, `s1`=S1 SAR — both free, no credentials |
 | Fetch a SAR scene | `sat_fetch.py --provider s1 --bbox … --dry-run` then without `--dry-run` (free, all-weather; needs its own `best_sar.pt`) |
