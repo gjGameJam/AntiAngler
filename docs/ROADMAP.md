@@ -41,7 +41,7 @@ modest-recall detector; P2 adds free all-weather/night/dark coverage. Both free 
 
 ## Cross-cutting prerequisite (done before the imagery phases): AUDIT #1 — the `main()`-guard refactor ✅ DONE (2026-07-15)
 
-**Done.** The former module-top-level orchestration (was `sat_fetch.py:409-529`) is now wrapped in
+**Done.** The former module-top-level orchestration is now wrapped in
 `def main(argv=None):` guarded by `if __name__ == "__main__": raise SystemExit(main())`, and
 `parse_args(argv=None)` takes an optional argv (so importers/tests can supply args explicitly instead
 of hijacking `sys.argv`). Importing `sat_fetch` no longer runs `parse_args()` or a fetch.
@@ -154,9 +154,9 @@ STAC/catalog side is close to a `--collection` change — but the sensor differs
 **Steps (1-3 ✅ done in `providers/s1.py`; 4 remaining):**
 1. **Drop the cloud logic (it silently breaks search otherwise):** SAR items carry **no** `eo:cloud_cover`
    property, so the existing `search_candidates` query `{"eo:cloud_cover": {"lt": max_cloud}}`
-   (`sat_fetch.py:209`) returns **zero** items on `sentinel-1-grd` — you must drop that clause for the SAR
+   returns **zero** items on `sentinel-1-grd` — you must drop that clause for the SAR
    provider (rank by acquisition date / relative-orbit instead). `assess_aoi` already degrades gracefully
-   with no SCL (`sat_fetch.py:270`, coverage-only from band nodata), so `aoi_cloud` just stays `None` and
+   with no SCL (coverage-only from band nodata), so `aoi_cloud` just stays `None` and
    selection falls back to coverage — that part needs no change.
 2. **Choose GRD vs RTC — RESOLVED: use RTC (now the default).** PC has both `sentinel-1-grd`
    (ground-range detected) and `sentinel-1-rtc` (radiometrically terrain-corrected, analysis-ready σ⁰).

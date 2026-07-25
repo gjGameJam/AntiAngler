@@ -6,11 +6,18 @@ the optical `best.pt` (live) and the SAR `best_sar.pt` (not built yet). This pla
 2026-07-15/16 optical-vs-SAR review. Read `docs/STATUS.md` for live model numbers, `docs/ROADMAP.md`
 for the phase structure this feeds. Priorities are ordered by (impact ÷ effort)._
 
+_**Refreshed 2026-07-23:** **O7 (the AIS-mismatch join) is now BUILT** — the whole Phase-3 fusion
+pipeline exists (`fuse_violations.py` + the AIS/GFW ingesters; `docs/PHASE3_PLAN.md`), so the strategic
+precision endgame is available today, not future. O1 (water mask) and O2 (NDWI) shipped; the O3
+negative-ratio safeguard is built. The open accuracy work is **O3** (same-region hard negatives), **O4**
+(more diverse positives + a 2nd holdout), **O6** (eval hardening), and the whole SAR track (Part 2)._
+
 ## What the review actually showed (the diagnosis)
 
 - **Optical false positives cluster at coastlines / land / nodata edges** (Cyclades detail tile: a
   pile of boxes on the shore). Root cause: `detect_boats.py` only masks to the **MPA polygon** for
-  WDPA runs (`inside_mpa`, :200-215) — there is **no general water mask**, so bright land, surf,
+  WDPA runs (the `inside_mpa` tag) — at review time there was **no general water mask** (O1 below
+  shipped one), so bright land, surf,
   wakes, foam, sun-glint and thin cloud all get flagged. This is the #1 visible "inaccuracy."
 - **Optical misses small vessels** — the 10 m GSD renders a sub-15 m boat as 1-5 px. Real, but a
   *physical* ceiling, not a bug. Recall is a candidate-generation number, not a promise.
@@ -20,7 +27,7 @@ for the phase structure this feeds. Priorities are ordered by (impact ÷ effort)
   are the *optical* model misapplied. (Also: circles over the black no-data wedge in the Fujairah SAR
   panel are just detections plotted where the swath has no data — not errors.)
 
-**Guiding principle (already in `detect_boats.py:59`): recall-favouring candidate generation, then
+**Guiding principle (already baked into `detect_boats.py`'s low `--conf` default): recall-favouring candidate generation, then
 filter false positives downstream** (water mask now, AIS-mismatch in Phase 3). So: lift recall where
 physics allows, and attack precision with *filters* that cost little recall — not by raising conf
 (which trades recall away) or piling on hard negatives (which made `finetune-reef` too conservative).
@@ -68,7 +75,7 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
 | O4 | More diverse real positives (proven engine) | recall | med (ongoing) | the durable recall lever |
 | O5 | Inference/tiling tuning | recall | low | small, diminishing |
 | O6 | Eval hardening (2nd small-vessel holdout, FP strata) | trust | med | trustworthy deltas |
-| O7 | Phase 3 AIS-mismatch join | precision (product) | high | the ultimate FP filter |
+| O7 | Phase 3 AIS-mismatch join ✅ **BUILT** | precision (product) | high | the ultimate FP filter — `fuse_violations.py` (Phase 3) exists; wire runs through it |
 
 ### O1 — Water/land mask at inference ✅ **SHIPPED (2026-07-16)**
 - **What shipped:** `scripts/water_mask.py` fetches **ESA WorldCover 10 m** (free, same PC STAC, class
@@ -140,11 +147,15 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
 - Add a 2nd small-vessel holdout; add region diversity; report P/R **at the operating point** per holdout
   with bootstrap CIs (harness exists); stratify FP by Step-0 cause so future deltas are attributable.
 
-### O7 — Phase 3 AIS-mismatch (strategic, the real precision ceiling)
+### O7 — Phase 3 AIS-mismatch (strategic, the real precision ceiling) ✅ **BUILT (2026-07-23)**
 - **dark-vessel = detection − AIS** filters out FPs that sit on a matching AIS track and keeps real dark
   vessels. This *inverts* the metric from recall (GSD-capped) to mismatch precision (improvable). It's the
   payoff that makes a modest detector "good enough" — see `docs/ROADMAP.md` Phase 3. Complementary to
   O1-O4, not a substitute.
+- **Status:** the fusion layer is built and offline-tested — `fuse_violations.py` (matcher) + the AIS
+  ingesters (`aisstream_fetch.py`, `marinecadastre_fetch.py`) + the GFW join (`gfw_vessels.py`). What
+  remains is 🏠 do-from-home: live-validate the AISStream/GFW calls over a real MPA (`docs/PHASE3_PLAN.md`
+  Workstream 1). So the FP-filtering endgame is available *now* over any run + AIS file.
 
 **Recommended optical sequence:** Step 0 → **O1 (+O2a NDWI mask)** → **O3** → **O4 ongoing** → O6 → O5, with
 O7 as the strategic overlay.
