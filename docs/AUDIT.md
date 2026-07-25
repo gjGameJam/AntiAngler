@@ -33,10 +33,11 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 
 ## P2 — Medium (reliability & reproducibility)
 
-3. **`requirements.txt` doesn't cover steps 1–2.** `pandas`, `geodatasets`, `matplotlib` (imported by
-   `prep_polygons.py` / `view_polygons.py`) are unpinned — a fresh clone can't run the first two
-   pipeline steps from `pip install -r requirements.txt` alone (CLAUDE.md admits "install manually").
-   **Fix:** pin the three at `==` after verifying in the venv, per the repo's pin-once-verified rule.
+3. **`requirements.txt` doesn't cover steps 1–2** — ✅ **DONE (2026-07-23).** `pandas==3.0.5`,
+   `geodatasets==2026.5.1`, `matplotlib==3.11.1` (imported by `prep_polygons.py` / `view_polygons.py`)
+   are now pinned in `requirements.txt`; the pip resolver confirmed they co-resolve with the existing
+   `numpy==2.4.6` / `geopandas==1.1.4` pins (dry-run). A fresh clone can now run steps 1–2 from
+   `pip install -r requirements.txt` alone.
 
 4. **No network retry/backoff anywhere** (STILL OPEN). `gfw_fetch.py` is a single `requests.post`;
    `sat_fetch.py` does STAC search + N candidate SCL probes + COG reads with no retry; the P3 ingesters
@@ -52,9 +53,11 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
    syntax error in any script or a P3 regression now fails CI instead of shipping. (`ruff check` could
    be added later as an optional lint step.)
 
-6. **No `.env.example`.** The env surface (`GFW_API_TOKEN`, `PC_SDK_SUBSCRIPTION_KEY`, all `GFW_*` and
-   `SAT_*` fallbacks) is only described in prose. **Fix:** add a committed `.env.example` listing every
-   var with a comment and a safe placeholder.
+6. **No `.env.example`** — ✅ **DONE (2026-07-23).** A committed `.env.example` leads with the three
+   credentials (`GFW_API_TOKEN`, `AISSTREAM_API_KEY`, optional `PC_SDK_SUBSCRIPTION_KEY`) and a grouped
+   legend of the ~100 per-script env-var prefixes (`GFW_*`/`SAT_*`/`DET_*`/`FUSE_*`/`AIS_*`/`GFWV_*`/
+   `MC_*`/`SCAN_*`/`REPORT_*`/…) with a `--help` pointer for the full list — an explicit per-flag dump
+   would be a 100-line wall of noise. `.env` stays gitignored; `.env.example` is committed.
 
 ## P3 — Low (polish; several are deliberate house-style trade-offs)
 
@@ -81,5 +84,7 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 ---
 
 ### Suggested order of attack
-P1.1 (main guard) is done for `sat_fetch`; **the highest-value open item now is #6 (`.env.example`)** — quick reproducibility wins, one PR. Then #2 (`prep_polygons` hardening) and #4 (network retry). #7–#11 are conscious house-style trade-offs; leave.
-These items are also indexed under `docs/ROADMAP.md` → "Remaining TODO items" (🧹 hygiene).
+Reproducibility wins #3 (`requirements.txt`), #5 (CI test job), and #6 (`.env.example`) are **done**.
+**The open items now are #2 (`prep_polygons` hardening) and #4 (network retry/backoff)**; #1's remaining
+scripts (`gfw_fetch`/`prep_polygons`/`view_polygons` main-guards) are lower priority. #7–#11 are conscious
+house-style trade-offs; leave. These are also indexed under `docs/ROADMAP.md` → "Remaining TODO items".

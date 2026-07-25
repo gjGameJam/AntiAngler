@@ -274,9 +274,10 @@ status"), the phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLA
 ### 🧹 Repo hygiene / reproducibility (`docs/AUDIT.md`, still open)
 - ✅ **DONE (2026-07-23)** — a cheap **CI job** (`.github/workflows/tests.yml`): `compileall` + the
   89-test offline suite on every push/PR. (`gfw.yml` still only runs `gfw_fetch.py` on schedule.)
-- A committed **`.env.example`** listing every env var (`GFW_API_TOKEN`, `AISSTREAM_API_KEY`, `SAT_*`, …).
-- `main()`-guard + input/atomic-write hardening for `gfw_fetch.py` / `prep_polygons.py` / `view_polygons.py`;
-  network retry/backoff on the GFW + `/vsicurl` calls; pin `pandas`/`geodatasets`/`matplotlib`.
+- ✅ **DONE (2026-07-23)** — committed **`.env.example`** (credentials + grouped per-script env-var legend)
+  and **pinned `pandas`/`geodatasets`/`matplotlib`** in `requirements.txt` (resolver-verified).
+- Still open: `main()`-guard + input/atomic-write hardening for `gfw_fetch.py` / `prep_polygons.py` /
+  `view_polygons.py`; network retry/backoff on the GFW + `/vsicurl` calls.
 - Cosmetic: SAR runs write under `data/raw/sentinel2/` — add a `data/raw/sentinel1/` output dir so the
   modalities don't mix (`docs/IMPROVEMENT_PLAN.md` cross-cutting).
 

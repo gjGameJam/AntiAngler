@@ -1,10 +1,9 @@
 # Runtime dependencies for AntiAngler.
 # Pinned exactly (==) for reproducibility. Bump manually when needed.
 #
-# Covers scripts/gfw_fetch.py, the .github/workflows/gfw.yml daily cron, and
-# scripts/sat_fetch.py. prep_polygons.py and view_polygons.py additionally need
-# pandas, geodatasets, and matplotlib — pin those here once they're installed
-# in a working local venv and verified.
+# Covers scripts/gfw_fetch.py, the .github/workflows/gfw.yml daily cron,
+# scripts/sat_fetch.py, and the WDPA prep/visualization steps
+# (prep_polygons.py / view_polygons.py — pandas, geodatasets, matplotlib).
 #
 # The stage 2-3 detection/review/refine loop (detect_boats.py, review_server.py,
 # export_labels.py) needs the heavier ML/web stack in requirements-ml.txt — kept
@@ -21,3 +20,11 @@ rasterio==1.4.4
 geopandas==1.1.4
 pystac-client==0.9.0
 planetary-computer==1.0.0
+
+# scripts/prep_polygons.py (WDPA shapefiles → GeoPackage) + scripts/view_polygons.py
+# (overlay MPAs on a Natural Earth map). pandas comes transitively via geopandas but is
+# pinned explicitly here. Versions confirmed to co-resolve with the pins above by the pip
+# resolver (dry-run against numpy==2.4.6 / geopandas==1.1.4); verify on the next venv build.
+pandas==3.0.5
+geodatasets==2026.5.1
+matplotlib==3.11.1
