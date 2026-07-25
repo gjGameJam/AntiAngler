@@ -73,8 +73,8 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
 | O2 | NIR / NDWI (mask now, 4-ch model later) | precision (+recall) | med→high | (a) NDWI filter BUILT but a **calibrated non-win** on small-vessel FPs (glint≠blank water); (b) 4-ch model deferred |
 | O3 | Same-region hard negatives (glint/coast/cloud) | precision | med | fewer FPs; **watch recall** |
 | O4 | More diverse real positives (proven engine) | recall | med (ongoing) | the durable recall lever |
-| O5 | Inference/tiling tuning | recall | low | small, diminishing |
-| O6 | Eval hardening (2nd small-vessel holdout, FP strata) | trust | med | trustworthy deltas |
+| O5 | Inference/tiling tuning ✅ **MEASURED** | recall | low | imgsz 1024+conf 0.15 confirmed; **1280 a non-win** (see below) |
+| O6 | Eval hardening ✅ **harness exercised** (2nd small-vessel holdout still 🏠) | trust | med | fresh deploy-point CIs on both holdouts |
 | O7 | Phase 3 AIS-mismatch join ✅ **BUILT** | precision (product) | high | the ultimate FP filter — `fuse_violations.py` (Phase 3) exists; wire runs through it |
 
 ### O1 — Water/land mask at inference ✅ **SHIPPED (2026-07-16)**
@@ -139,13 +139,42 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
   and a **2nd small-vessel holdout** to confirm the 0.67 magnitude.
 - **How:** the in-repo loop, holding out each fresh scene *before* folding it in; keep one rotating holdout.
 
-### O5 — Inference / tiling tuning
-- imgsz 1024 is the dominant lever, already spent. Test 1280/1536 (compute vs marginal recall). Tune conf
-  per region if Step 0 shows region-dependent FP rates. Verify merge-dist (30 m) isn't double-counting.
+### O5 — Inference / tiling tuning ✅ **MEASURED (2026-07-25) — imgsz 1024 + conf 0.15 confirmed; 1280 a non-win**
+- **imgsz 1280 (plain, no TTA) does NOT help** — measured on the live `best.pt` (finetune-smallvessel) at
+  conf 0.15 on both holdouts (`eval_holdout.py`, center-distance matching):
+  - **Alonnisos** (small-vessel, 76-box relabeled): 1024→1280 **recall 0.70→0.49** (WORSE), precision flat
+    (0.40→0.41), FP/chip 1.23→0.83 — upscaling past the 1024 train size *loses* the 1–5 px vessels it was
+    meant to enlarge (>5px stratum 0.69→0.47). A clear net loss.
+  - **Port Said** (big-ship, 42-box): 1024→1280 **recall 0.69→0.69, precision 0.97→0.97, FP/chip 0.08→0.08
+    — IDENTICAL**. So the Port Said lift STATUS reports (0.69→0.81) is entirely from **`--augment` (TTA:
+    multi-scale + flips)**, *not* from raw imgsz. Raising imgsz alone buys nothing on big ships either.
+  - ⇒ **Keep imgsz 1024 as the deploy default; 1536 not worth testing** (1280 already shows zero/negative
+    return, and it is 1.6× slower). The big-ship recall lever is TTA (already offered as the opt-in
+    `detect_boats --imgsz 1280 --augment` big-ship profile), not tile/inference size.
+- **conf operating point confirmed:** `conf_sweep.py` on the relabeled Alonnisos (64 chips / 76 boxes,
+  imgsz 1024) puts the **F1 peak at conf 0.15 (F1 0.510)** — adjacent 0.10→0.470, 0.20→0.406. Recall-vs-conf
+  is steep (R 0.99@0.05 → 0.70@0.15 → 0.38@0.20), FP-vs-conf shallower, so 0.15 stays the recall-favouring
+  candidate-generation operating point. **No deploy-conf change.**
+- **merge-dist:** eval matched at center-distance 8 px (80 m); no double-counting seen in the holdout GT. A
+  full `detect_boats.py --merge-dist` sweep on a live scene needs 🏠 imagery (do-from-home) — deferred.
 
-### O6 — Eval hardening
-- Add a 2nd small-vessel holdout; add region diversity; report P/R **at the operating point** per holdout
-  with bootstrap CIs (harness exists); stratify FP by Step-0 cause so future deltas are attributable.
+### O6 — Eval hardening ✅ **HARNESS EXERCISED (2026-07-25) — fresh deploy-point numbers on the relabeled holdouts**
+- **Deploy-point P/R at the operating point (conf 0.15 / imgsz 1024), with bootstrap 90% CIs and FP strata,
+  re-measured on the relabeled holdouts** (the harness `eval_holdout.py` already reports all of this):
+
+  | Holdout | chips | boxes | P | R | FP/chip | recall 90% CI |
+  |---|---|---|---|---|---|---|
+  | Alonnisos (small-vessel) | 64 | 76 | 0.40 | 0.70 | 1.23 | [0.59, 0.79] |
+  | Port Said (big-ship) | 12 | 42 | 0.97 | 0.69 | 0.08 | [0.57, 0.79] |
+
+  Both reproduce STATUS's post-relabel baseline (Alonnisos 0.40/0.70, Port Said 0.97/0.69); FP/chip on
+  Alonnisos is now **1.23** (vs the 1.55 STATUS recorded pre-relabel — relabeling reclassified real boats
+  that were counted as FPs). These are the honest baselines O3 (hard negatives) must beat.
+- **Still open (needs 🏠 fetch/GPU/review, not runnable in this sandbox):** a **2nd small-vessel holdout**
+  to confirm the 0.70 Alonnisos magnitude (still one 64-chip scene), broader **region diversity**, and a
+  finer **FP-by-Step-0-cause** strata (glint/swell/reef vs land) — the last needs the WorldCover/NDWI masks
+  over a fresh scene. The bootstrap-CI + size-strata reporting the harness already emits is sufficient for
+  attributable deltas on the existing holdouts.
 
 ### O7 — Phase 3 AIS-mismatch (strategic, the real precision ceiling) ✅ **BUILT (2026-07-23)**
 - **dark-vessel = detection − AIS** filters out FPs that sit on a matching AIS track and keeps real dark
@@ -158,7 +187,10 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
   Workstream 1). So the FP-filtering endgame is available *now* over any run + AIS file.
 
 **Recommended optical sequence:** Step 0 → **O1 (+O2a NDWI mask)** → **O3** → **O4 ongoing** → O6 → O5, with
-O7 as the strategic overlay.
+O7 as the strategic overlay. **O5 (inference tuning) and O6 (harness) are now measured/exercised
+(2026-07-25)** — imgsz 1024 + conf 0.15 is the confirmed operating point (1280 a non-win), so the remaining
+optical accuracy work is the data-driven levers **O3** (same-region hard negatives) and **O4** (diverse
+positives + a 2nd small-vessel holdout), both 🏠 do-from-home (fetch + GPU + human review).
 
 ---
 
