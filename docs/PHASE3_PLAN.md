@@ -24,7 +24,7 @@ precision*, which the fusion improves.
 | Historical AIS (3C) | `marinecadastre_fetch.py` | archive CSV → AIS contract | `test_marinecadastre_fetch.py` (7) |
 | Contract guard (4A) | `scripts/tests/fixtures/` | — | `test_pipeline_e2e.py` (3) |
 
-**89 offline tests**, no network / key / ML deps. The `violation_events.json` schema is pinned in
+**104 offline tests**, no network / key / ML deps. The `violation_events.json` schema is pinned in
 `docs/PIPELINE.md` (4B). The full chain:
 `sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels → report_violations`
 (or one `scan_violations.py` invocation).

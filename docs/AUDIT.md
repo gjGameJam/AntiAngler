@@ -17,19 +17,24 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
    (`open_catalog`/`search_candidates`/`assess_aoi`/`select_scene`/`read_aoi`/`scale_to_uint8` + the
    tiling/IO helpers) are now importable and unit-testable. See `docs/ROADMAP.md` "Cross-cutting
    prerequisite" for the reusable-seam table.
-   **Still to do (same fix, other scripts):** `gfw_fetch.py`, `prep_polygons.py`, and `view_polygons.py`
-   still run their orchestration at module top level — apply the same `main()` guard when each is next
-   touched (lower priority; none are imported by another module today).
+   ~~**Still to do (same fix, other scripts):** `gfw_fetch.py`, `prep_polygons.py`, and
+   `view_polygons.py`.~~ **NOW DONE (2026-07-25):** all three wrap their orchestration in
+   `def main(argv=None):` under `if __name__ == "__main__": raise SystemExit(main())` with
+   `parse_args(argv=None)`. AST-verified: importing any of them runs no work (only imports/consts/defs
+   at module level). `gfw_fetch.py` additionally soft-imports `dotenv` and lazy-imports `requests` in
+   `main()`, so `import gfw_fetch` is stdlib-only and its pure helpers are now offline-tested
+   (`test_gfw_fetch.py`).
 
 2. **`prep_polygons.py` is fragile and off-house-style, and it writes the file everything else
-   depends on** (STILL OPEN):
-   - Writes the GeoPackage **non-atomically** (`mpas.to_file(out_file)`) — a crash mid-write
-     corrupts `wdpa_marine_ia_ib.gpkg`, which `sat_fetch.py` and `view_polygons.py` both read. Every
-     other script uses `.tmp` + `Path.replace()`; this one doesn't.
-   - No existence check on the 3 input shapefiles → cryptic error if WDPA isn't
-     downloaded. No argparse/`env_or` knobs (every other script has them). Dead commented code.
-   **Fix:** guard inputs with a fail-fast `RuntimeError`; write atomically; adopt the `env_or`/argparse
-   idiom for at least the IUCN/MARINE filter and output path.
+   depends on** — ✅ **DONE (2026-07-25):**
+   - Now writes the GeoPackage **atomically** (`write_gpkg_atomic`: sibling `.tmp.gpkg` → `Path.replace()`,
+     tmp cleaned up on any failure) — a crash mid-write no longer corrupts `wdpa_marine_ia_ib.gpkg`,
+     which `sat_fetch.py` and `view_polygons.py` both read.
+   - `check_inputs()` fail-fasts with a clear `FileNotFoundError` (+ download pointer) if any of the 3
+     shapefile parts is missing; `filter_marine_ia_ib()` validates the `MARINE`/`IUCN_CAT` columns
+     exist and `main()` refuses to write an empty result. Added an argparse `--out` knob; dead
+     commented code removed. (`view_polygons.py` similarly fail-fasts if the input GeoPackage is
+     missing and writes `--save` PNGs atomically.)
 
 ## P2 — Medium (reliability & reproducibility)
 
@@ -49,7 +54,7 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 5. **CI runs no lint/compile/test** — ✅ **DONE (2026-07-23).** `.github/workflows/tests.yml` runs on
    every push + PR: `python -m compileall -q scripts` (syntax gate for the whole repo, including the
    heavy ML/geo scripts — compileall parses, doesn't import) + `python -m unittest discover -s
-   scripts/tests` (the 89-test offline suite). Pure stdlib, no credentials/deps — free coverage. A
+   scripts/tests` (the 104-test offline suite). Pure stdlib, no credentials/deps — free coverage. A
    syntax error in any script or a P3 regression now fails CI instead of shipping. (`ruff check` could
    be added later as an optional lint step.)
 
@@ -84,7 +89,7 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 ---
 
 ### Suggested order of attack
-Reproducibility wins #3 (`requirements.txt`), #5 (CI test job), and #6 (`.env.example`) are **done**.
-**The open items now are #2 (`prep_polygons` hardening) and #4 (network retry/backoff)**; #1's remaining
-scripts (`gfw_fetch`/`prep_polygons`/`view_polygons` main-guards) are lower priority. #7–#11 are conscious
+Reproducibility wins #3 (`requirements.txt`), #5 (CI test job), and #6 (`.env.example`) are **done**, as
+are #1 (all four scripts now have `main()` guards) and #2 (`prep_polygons` hardening), both closed
+2026-07-25. **The one open reliability item is #4 (network retry/backoff).** #7–#11 are conscious
 house-style trade-offs; leave. These are also indexed under `docs/ROADMAP.md` → "Remaining TODO items".

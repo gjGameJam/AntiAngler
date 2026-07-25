@@ -234,7 +234,7 @@ Built — six scripts, each its own module (ingestion never imports the matcher 
 - **`scan_violations.py`** — thin batch driver sequencing detect → fuse → (GFW-enrich) → report via each
   stage's `main(argv)`.
 
-The `violation_events.json` schema is pinned in `docs/PIPELINE.md`. **89 offline tests** (synthetic
+The `violation_events.json` schema is pinned in `docs/PIPELINE.md`. **104 offline tests** (synthetic
 fixtures + a committed end-to-end contract guard; no network / key / ML deps). 🏠 **DO FROM HOME — not yet
 run against the live AISStream / GFW services** (the remote sandbox blocks those hosts and has no
 key/token). Live validation of the calls + a first real violation from real imagery is the crux of
@@ -249,7 +249,7 @@ survives. The product cares about *mismatch precision* (which fusion improves), 
 
 ## Remaining TODO items (consolidated, 2026-07-23)
 
-The technical pipeline (Phases 0/2/3) is built and offline-tested (89 tests). What's left is grouped by
+The technical pipeline (Phases 0/2/3) is built and offline-tested (104 tests). What's left is grouped by
 what it needs. This consolidates the gaps flagged in the Executive Summary (`CLAUDE.md` → "Implementation
 status"), the phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLAN.md`, and `docs/AUDIT.md`
 — read those for detail; this is the single index.
@@ -284,11 +284,13 @@ status"), the phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLA
 
 ### 🧹 Repo hygiene / reproducibility (`docs/AUDIT.md`, still open)
 - ✅ **DONE (2026-07-23)** — a cheap **CI job** (`.github/workflows/tests.yml`): `compileall` + the
-  89-test offline suite on every push/PR. (`gfw.yml` still only runs `gfw_fetch.py` on schedule.)
+  104-test offline suite on every push/PR. (`gfw.yml` still only runs `gfw_fetch.py` on schedule.)
 - ✅ **DONE (2026-07-23)** — committed **`.env.example`** (credentials + grouped per-script env-var legend)
   and **pinned `pandas`/`geodatasets`/`matplotlib`** in `requirements.txt` (resolver-verified).
-- Still open: `main()`-guard + input/atomic-write hardening for `gfw_fetch.py` / `prep_polygons.py` /
-  `view_polygons.py`; network retry/backoff on the GFW + `/vsicurl` calls.
+- ✅ **DONE (2026-07-25)** — `main()`-guard + input/atomic-write hardening for `gfw_fetch.py` /
+  `prep_polygons.py` / `view_polygons.py` (all wrap orchestration in `main(argv=None)`; fail-fast input
+  validation; atomic `.tmp`→`replace` writes with cleanup; `gfw_fetch` now stdlib-importable + offline-tested).
+- Still open: network retry/backoff on the GFW + `/vsicurl` calls (AUDIT #4).
 - Cosmetic: SAR runs write under `data/raw/sentinel2/` — add a `data/raw/sentinel1/` output dir so the
   modalities don't mix (`docs/IMPROVEMENT_PLAN.md` cross-cutting).
 
@@ -319,7 +321,7 @@ commercial VHR/SAR per-alert tasking). Recorded as the north-star vision, not a 
 | Historical AIS (P3) ✅ | `marinecadastre_fetch.py --csv AIS_YYYY_MM_DD.csv --wdpa-id <id> --start … --end …` → `data/raw/ais/…` (fuse past US-waters scenes) |
 | Rank / report (P3) ✅ | `report_violations.py --run <run>` → ranked `violations_report_*.csv` + self-contained `.html` |
 | One-shot driver (P3) ✅ | `scan_violations.py --run <run> --ais <file>.json [--gfw --wdpa-id <id>]` (fuse → enrich → report) |
-| Test the P3 stages offline | `python -m unittest discover -s scripts/tests -p 'test_*.py'` (89 tests; synthetic, no network / key / ML deps) |
+| Test the P3 stages offline | `python -m unittest discover -s scripts/tests -p 'test_*.py'` (104 tests; synthetic, no network / key / ML deps) |
 | Violation schema | `docs/PIPELINE.md` → `violation_events.json` (pinned) |
 
 ## Key sources
