@@ -34,7 +34,7 @@ def truthy(val):
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
-        description="Batch-drive the Phase-3 stages (detect → fuse → GFW-enrich → report) for a run "
+        description="Batch-drive the Phase-3 stages (detect -> fuse -> GFW-enrich -> report) for a run "
                     "dir (PHASE3_PLAN Workstream 2A). Thin orchestrator over each stage's main(argv).")
     p.add_argument("--run", type=Path, default=env_or("SCAN_RUN", None),
                    help="A detect_boats run dir (contains detections.json; or use --detect to make it).")
@@ -115,14 +115,14 @@ def run_pipeline(args):
     summary = {"run": str(run), "stages": [], "outputs": {}}
 
     if args.detect:
-        print("[scan] detect_boats …")
+        print("[scan] detect_boats ...")
         stage_detect(run, args.weights)
         summary["stages"].append("detect")
 
     if args.ais is None:
         raise RuntimeError("Provide --ais <positions.json> to fuse (or only --detect to stop at stage 2).")
 
-    print("[scan] fuse_violations …")
+    print("[scan] fuse_violations ...")
     stage_fuse(run, args.ais, args.vessels, args.dt_minutes)
     summary["stages"].append("fuse")
     events_json = run / "violation_events.json"
@@ -132,16 +132,16 @@ def run_pipeline(args):
     # was supplied (already enriched) or --gfw not set.
     if args.gfw and not args.vessels:
         vessels_out = run / "gfw_vessels.json"
-        print("[scan] gfw_vessels (--from-events) …")
+        print("[scan] gfw_vessels (--from-events) ...")
         stage_gfw_vessels(events_json, vessels_out, args.gfw_start, args.gfw_end, args.wdpa_id)
         summary["stages"].append("gfw_vessels")
         summary["outputs"]["gfw_vessels"] = str(vessels_out)
-        print("[scan] fuse_violations (re-fuse --vessels) …")
+        print("[scan] fuse_violations (re-fuse --vessels) ...")
         stage_fuse(run, args.ais, vessels_out, args.dt_minutes)
         summary["stages"].append("refuse")
 
     if not args.no_report:
-        print("[scan] report_violations …")
+        print("[scan] report_violations ...")
         stage_report(run)
         summary["stages"].append("report")
 
@@ -153,7 +153,7 @@ def main(argv=None):
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"SCAN VIOLATIONS ({started}):")
     summary = run_pipeline(args)
-    print(f"\n[scan] done — stages: {' → '.join(summary['stages'])}")
+    print(f"\n[scan] done - stages: {' -> '.join(summary['stages'])}")
     for name, path in summary["outputs"].items():
         print(f"       {name}: {path}")
     return 0

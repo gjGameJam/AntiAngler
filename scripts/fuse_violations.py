@@ -129,7 +129,7 @@ def load_detections(run_dir):
     dpath = run_dir / "detections.json"
     if not dpath.exists():
         raise RuntimeError(f"No detections.json in {run_dir} - run detect_boats.py (or sar_seed.py) first.")
-    return json.loads(dpath.read_text())
+    return json.loads(dpath.read_text(encoding="utf-8"))
 
 
 def load_vessels(vessels_path):
@@ -142,7 +142,7 @@ def load_vessels(vessels_path):
     path = Path(vessels_path)
     if not path.exists():
         raise RuntimeError(f"Vessels file not found: {path}")
-    doc = json.loads(path.read_text())
+    doc = json.loads(path.read_text(encoding="utf-8"))
     rows = doc.get("vessels", []) if isinstance(doc, dict) else doc
     by_mmsi = {}
     for row in rows:
@@ -159,7 +159,7 @@ def load_manifest(run_dir):
     if not mpath.exists():
         return {}
     try:
-        return json.loads(mpath.read_text())
+        return json.loads(mpath.read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return {}
 
@@ -222,10 +222,10 @@ def load_ais(ais_path):
         raise RuntimeError(f"AIS file not found: {ais_path}")
     suffix = ais_path.suffix.lower()
     if suffix == ".csv":
-        with ais_path.open(newline="") as fh:
+        with ais_path.open(newline="", encoding="utf-8-sig", errors="replace") as fh:
             raw_rows = list(csv.DictReader(fh))
     else:
-        doc = json.loads(ais_path.read_text())
+        doc = json.loads(ais_path.read_text(encoding="utf-8"))
         if isinstance(doc, dict):
             raw_rows = doc.get("positions") or doc.get("pings") or doc.get("data") or []
         elif isinstance(doc, list):
@@ -292,7 +292,7 @@ def match_detection(det, pings, scene_dt, dt_window_s, slack_m, max_speed_kn):
 
 def write_atomic(path, text):
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
 

@@ -194,14 +194,14 @@ def bbox_from_wdpa(gpkg, wdpa_id, wdpa_pid):
 
 def write_atomic(path, text):
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
 
 def iter_csv_rows(csv_paths):
     """Yield row dicts from one or more CSVs, streaming (national files are large)."""
     for path in csv_paths:
-        with Path(path).open(newline="") as fh:
+        with Path(path).open(newline="", encoding="utf-8-sig", errors="replace") as fh:
             yield from csv.DictReader(fh)
 
 

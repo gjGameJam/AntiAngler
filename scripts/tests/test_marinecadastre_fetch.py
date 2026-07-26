@@ -118,6 +118,23 @@ class TestMainAndFuseRoundTrip(unittest.TestCase):
             self.assertEqual(events["det_00000"]["mmsi"], "211476060")
             self.assertEqual(events["det_00001"]["ais_status"], "dark")
 
+    def test_reads_utf8_bom_csv(self):
+        # Excel re-saves add a UTF-8 BOM; the reader must not let it corrupt the MMSI header
+        # (a locale-default read turned the first column into '﻿MMSI' and dropped every row).
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            csv_path = tmp / "bom.csv"
+            with csv_path.open("w", newline="", encoding="utf-8-sig") as fh:
+                w = csv.writer(fh)
+                w.writerow(MC_HEADER)
+                w.writerow(["211476060", "2026-07-14T10:02:00", "37.0", "25.0", "0.3", "180", "ÆRØ", ""])
+            out = tmp / "ais.json"
+            mc.main(["--csv", str(csv_path), "--out", str(out)])
+            doc = json.loads(out.read_text())
+            self.assertEqual(doc["position_count"], 1)
+            self.assertEqual(doc["positions"][0]["mmsi"], "211476060")
+            self.assertEqual(doc["positions"][0]["name"], "ÆRØ")
+
     def test_requires_csv(self):
         class _A:
             csv = None; date = None; bbox = [24.9, 36.9, 26.1, 38.1]

@@ -4,6 +4,7 @@ import html
 import io
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -86,7 +87,7 @@ def resolve_inputs(args):
 
 def load_events(path):
     """Read one violation_events.json → (run_label, [events]). Tolerates a bare list."""
-    doc = json.loads(Path(path).read_text())
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
     if isinstance(doc, list):
         return Path(path).parent.name, doc
     return doc.get("run_dir") or Path(path).parent.name, doc.get("violation_events", [])
@@ -220,7 +221,7 @@ def rows_to_html(rows, sources):
 
 def write_atomic(path, text):
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
 
@@ -252,8 +253,11 @@ def main(argv=None):
           f"{f'  top={args.top}' if args.top else ''}")
     if rows:
         top = rows[0]
-        print(f"  top: score={top['violation_score']} {top['ais_status']} "
-              f"{top['vessel_name'] or top['mmsi'] or '—'} @ {top['mpa_name']}")
+        # Vessel/MPA names are often non-Latin; never let a legacy console encoding crash the summary.
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        line = (f"  top: score={top['violation_score']} {top['ais_status']} "
+                f"{top['vessel_name'] or top['mmsi'] or '-'} @ {top['mpa_name']}")
+        print(line.encode(enc, errors="replace").decode(enc, errors="replace"))
     print(f"  -> {out_csv}")
     print(f"  -> {out_html}")
     return 0

@@ -120,6 +120,21 @@ class TestMainIO(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             rv.main([])
 
+    def test_main_writes_non_ascii_and_iuu_utf8(self):
+        # The HTML declares <meta charset="utf-8"> and carries the U+26A0 IUU marker, and real
+        # vessel names are not Latin-1 — the write must be UTF-8 regardless of the locale default
+        # (Windows cp1252 crashed on both).
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "violation_events.json").write_text(json.dumps(events_doc(
+                "run", [ev("evt_1", 0.9, "matched", mmsi="412000000",
+                           vessel_name="海丰607", iuu_listed=True)])))
+            rv.main(["--run", str(tmp), "--out-csv", str(tmp / "r.csv"), "--out-html", str(tmp / "r.html")])
+            html = (tmp / "r.html").read_text(encoding="utf-8")
+            self.assertIn("海丰607", html)
+            self.assertIn("⚠", html)   # the IUU marker survived
+            self.assertIn("海丰607", (tmp / "r.csv").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

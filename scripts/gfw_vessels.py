@@ -142,9 +142,9 @@ def collect_mmsis(args):
     if args.mmsi:
         add([m for m in str(args.mmsi).split(",") if m.strip()])
     if args.from_events:
-        add(mmsis_from_events(json.loads(Path(args.from_events).read_text())))
+        add(mmsis_from_events(json.loads(Path(args.from_events).read_text(encoding="utf-8"))))
     if args.from_ais:
-        add(mmsis_from_ais(json.loads(Path(args.from_ais).read_text())))
+        add(mmsis_from_ais(json.loads(Path(args.from_ais).read_text(encoding="utf-8"))))
     return ordered
 
 
@@ -418,7 +418,7 @@ def build_vessel_record(identity, fishing, insights):
 
 def write_atomic(path, text):
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text)
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
 

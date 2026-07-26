@@ -6,6 +6,8 @@ exercised without network. Pure stdlib. Run:
     python scripts/tests/test_scan_violations.py
     python -m unittest scripts.tests.test_scan_violations
 """
+import contextlib
+import io
 import json
 import shutil
 import sys
@@ -88,6 +90,15 @@ class TestScanDriver(unittest.TestCase):
         summary = scan.run_pipeline(_Args(run=self.run, ais=self.ais, no_report=True))
         self.assertEqual(summary["stages"], ["fuse"])
         self.assertFalse(list(self.run.glob("violations_report_*.csv")))
+
+    def test_console_output_survives_legacy_codepage(self):
+        # Windows consoles default to legacy code pages; the driver's summary print crashed on
+        # U+2192 under cp1252. Drive main() through a strict cp1252 stdout to lock console-safety.
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+        with contextlib.redirect_stdout(stream):
+            rc = scan.main(["--run", str(self.run), "--ais", str(self.ais)])
+        stream.flush()
+        self.assertFalse(rc)
 
     def test_requires_run_and_ais(self):
         with self.assertRaises(RuntimeError):
