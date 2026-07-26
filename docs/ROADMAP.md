@@ -184,7 +184,7 @@ STAC/catalog side is close to a `--collection` change — but the sensor differs
      writes fine as a plain 2-band GeoTIFF, **but the YOLO detector wants 3 channels**. Standard trick:
      build a **pseudo-RGB [VV, VH, VV/VH-ratio]** (or VV, VH, VV−VH) 3-band chip so the same
      `detect_boats.py` inference path and the 3-channel model input work unchanged.
-4. 🏠 **DO FROM HOME — Train a separate SAR detector.** Needs local GPU/compute with the machine kept
+4. ✅ **DONE 2026-07-26 — first `best_sar.pt` trained + promoted** (`runs/sar-deep`: P2 arch, yolov8n backbone, 30 epochs on the RTX 4070 in 76 s; honest test split incl. the reviewed Gibraltar holdout P 0.392 / R 0.478 / mAP50 0.335). Thin-data first model — growing the set + the xView3 transfer below remain the levers. *(original step text kept:)* Needs local GPU/compute with the machine kept
    awake (a real 30-epoch run; the remote sandbox can't train — see `docs/STATUS.md` on the smoke-test
    sleep-inflation). Different modality → its own `best_sar.pt`; **transfer from public SAR ship
    datasets** — **xView3-SAR** (arXiv 2206.00897, the closest analog: Sentinel-1 dual-pol, maritime,
