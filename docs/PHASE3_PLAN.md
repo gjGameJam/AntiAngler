@@ -46,7 +46,13 @@ is what "finish Phase 3" means, and it drives the ordering below.
 > endpoint paths below follow GFW's documented v3 API and the parsers are drift-tolerant; 1B is the
 > checklist to confirm them against a real response.
 
-### 1A. AISStream live run  ☐
+### 1A. AISStream live run  ✅ DONE (2026-07-26, at home)
+
+> **Result:** first live connect succeeded outright — Singapore Strait bbox, 120 s:
+> **41 frames → 41 positions kept (37 vessels), 0 skipped, 0 errors**; records carry real
+> names/sog/cog, all inside the bbox, timestamps live. The wire-format handling (lat/lon corner
+> order, Go-format timestamps, Sog/Cog sentinels) is confirmed against the real stream, and the
+> output file feeds `fuse_violations.py --ais` without error. **Workstream 1 fully closed.**
 - **Do:** register a free key at https://aisstream.io → `AISSTREAM_API_KEY` in `.env`;
   `pip install -r requirements-ais.txt`; run `aisstream_fetch.py --bbox <a busy strait> --duration 120`.
 - **Verify:** the output has `positions` with N>0 vessels; spot-check a few records' `mmsi/lat/lon/
@@ -203,7 +209,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
 
 ## Definition of done for Phase 3
 
-- [ ] AISStream + GFW calls verified live once; any v3 shape drift fixed in the (isolated) parsers (1A, 1B — **GFW half ✅ 2026-07-26**, three corrections landed; AISStream half waits on the free key).
+- [x] AISStream + GFW calls verified live once; any v3 shape drift fixed in the (isolated) parsers (1A, 1B — **both ✅ 2026-07-26**: three GFW v3 corrections landed with real-response fixtures; AISStream worked first-connect, 41/41 kept over Singapore).
 - [x] One real MPA yields a spot-checked `violation_events.json` — a confirmed dark and a confirmed matched (1C — **✅ 2026-07-26, historical path**: Anacapa wake-vessel dark + BB PELAGIC matched at 2 s / 362 m; live-capture variant waits on 1A).
 - [x] `fishing_probability` is MPA-specific (3A — `--region-bbox`/`--wdpa-id`; live GFW call still 🏠).
 - [x] A batch driver runs the loop for a `--wdpa-id` (2A — `scan_violations.py`; live run still 🏠).
