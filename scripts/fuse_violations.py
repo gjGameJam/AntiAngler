@@ -264,9 +264,12 @@ def match_detection(det, pings, scene_dt, dt_window_s, slack_m, max_speed_kn):
     a moored vessel's 29-min-old ping otherwise built an envelope that "matched" detections
     21 km away while its 2-min-old ping proved it was still at the dock.) From that ping the
     vessel could have travelled reach = speed * |t_scene - t_ping| + slack (the ping's own sog;
-    fall back to max_speed_kn when sog is missing or zero) and it matches iff the great-circle
-    distance is <= reach. Returns the best match across vessels (smallest distance-minus-reach
-    margin, i.e. most comfortably inside its envelope) or None. A vessel stationary at the
+    fall back to max_speed_kn when sog is missing or zero) and it QUALIFIES iff the great-circle
+    distance is <= reach. Among qualifying vessels the detection is ATTRIBUTED to the nearest
+    one (tie -> smaller |dt|): the envelope decides WHETHER a vessel could be the object,
+    distance decides WHICH vessel it most likely is. (Lanes adjudication 2026-07-26: the old
+    most-comfortably-inside-envelope pick let an anchored vessel's huge max-speed-fallback
+    envelope out-bid an underway vessel 200 m from the detection.) A vessel stationary at the
     acquisition instant (dt=0) collapses reach to just the slack - correct, it must be right there.
     """
     lon, lat = det["centroid_wgs84"]
@@ -279,20 +282,20 @@ def match_detection(det, pings, scene_dt, dt_window_s, slack_m, max_speed_kn):
         if cur is None or dt_s < cur[0]:
             nearest[ping["mmsi"]] = (dt_s, ping)
     best = None
+    best_key = None
     for dt_s, ping in nearest.values():
         speed_kn = ping["sog"] if (ping["sog"] and ping["sog"] > 0) else max_speed_kn
         reach = speed_kn * KNOTS_TO_M_S * dt_s + slack_m
         dist = haversine_m(lon, lat, ping["lon"], ping["lat"])
         if dist <= reach:
-            margin = dist - reach   # <=0; more negative = more comfortably inside the envelope
-            if best is None or margin < best["margin"]:
+            key = (dist, dt_s)
+            if best_key is None or key < best_key:
+                best_key = key
                 best = {"mmsi": ping["mmsi"], "distance_m": round(dist, 1),
                         "dt_seconds": round(dt_s, 1), "reach_m": round(reach, 1),
-                        "margin": margin, "sog": ping["sog"], "cog": ping["cog"],
+                        "sog": ping["sog"], "cog": ping["cog"],
                         "ping_wgs84": [round(ping["lon"], 7), round(ping["lat"], 7)],
                         "ping_time": ping["when"].strftime("%Y-%m-%dT%H:%M:%SZ")}
-    if best is not None:
-        best.pop("margin", None)
     return best
 
 

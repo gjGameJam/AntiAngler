@@ -114,6 +114,24 @@ class TestVerificationCases(unittest.TestCase):
         e = by_detection(run_fuse(run, ais))["det_00000"]
         self.assertEqual(e["ais_status"], "dark")
 
+    def test_attribution_prefers_nearest_qualifying_vessel(self):
+        # Lanes adjudication (2026-07-26): an underway vessel ~160 m from the detection must win
+        # attribution over an anchored vessel 1 km away whose max-speed-fallback envelope is huge
+        # (the old smallest-margin pick chose the anchored one).
+        run = make_run(self._tmp, [{"confidence": 0.9, "centroid_wgs84": [25.0, 37.0],
+                                    "bbox_wgs84": [25.0, 37.0, 25.001, 37.001], "inside_mpa": True}])
+        ais = make_ais(self._tmp, [
+            # ~160 m east, dt=60 s, sog 6 kn -> reach ~685 m: qualifies with a tight envelope
+            {"mmsi": 222, "lon": 25.0018, "lat": 37.0, "timestamp": "2026-07-14T09:59:00Z",
+             "sog": 6.0, "cog": 90},
+            # ~1 km north, dt=10 min, no sog -> max-speed fallback reach ~8.2 km: also qualifies
+            {"mmsi": 333, "lon": 25.0, "lat": 37.009, "timestamp": "2026-07-14T10:10:00Z",
+             "sog": None, "cog": None},
+        ])
+        e = by_detection(run_fuse(run, ais))["det_00000"]
+        self.assertEqual(e["ais_status"], "matched")
+        self.assertEqual(e["mmsi"], "222")
+
     def test_known_dark_must_flag(self):
         # No AIS ping anywhere near -> DARK.
         run = make_run(self._tmp, [{"confidence": 0.8, "centroid_wgs84": [25.1, 37.1],

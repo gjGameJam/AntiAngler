@@ -86,7 +86,20 @@ is what "finish Phase 3" means, and it drives the ordering below.
 - **Effort:** M. **Risk:** the parsers are tolerant (drift → null fields, not crashes), so this is
   verify-and-adjust, not rebuild.
 
-### 1C. End-to-end real run over one MPA  ☐
+### 1C. End-to-end real run over one MPA  ✅ DONE (2026-07-26, historical path)
+
+> **Result:** Anacapa Island State Marine Reserve (WDPAID 352751), S2 2024-08-25T18:29Z (0% AOI
+> cloud) fused against same-day NOAA MarineCadastre archive AIS (8,383 positions / 145 vessels,
+> ±90 min window) via `scan_violations.py`. **2 in-MPA detections → 2 DARK**, one a visually
+> confirmed wake vessel (the confirmed dark point). A same-scene bbox run over the adjacent
+> Santa Barbara Channel lanes (`fuse --all-detections`) gave **43 detections → 36 matched / 7
+> dark**, all 36 GFW-enriched live — incl. the confirmed matched point: BB PELAGIC (MMSI
+> 338406714), AIS ping **2 s** from acquisition, **362 m** from the detection, underway 4.5 kn.
+> The first fusion caught three real matcher/ingest defects, all fixed + regression-tested the
+> same day: MarineCadastre passed AIS sentinel SOG 102.3/COG 360 through as real values; the
+> matcher admitted stale pings a fresher ping refuted (a moored tour boat 21 km away "matched");
+> and attribution favored huge fallback envelopes over the nearest qualifying vessel. The
+> live-capture variant (AISStream rolling buffer over a fresh overpass) still waits on 1A.
 - **Do:** pick an IUCN Ia/Ib MPA with traffic; capture AIS live (`aisstream_fetch --wdpa-id <id>
   --duration 600`) **while** fetching a fresh scene over the same AOI, then
   `detect_boats → fuse_violations --ais … → gfw_vessels --from-events … → fuse_violations … --vessels …`.
@@ -191,7 +204,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
 ## Definition of done for Phase 3
 
 - [ ] AISStream + GFW calls verified live once; any v3 shape drift fixed in the (isolated) parsers (1A, 1B — **GFW half ✅ 2026-07-26**, three corrections landed; AISStream half waits on the free key).
-- [ ] One real MPA yields a spot-checked `violation_events.json` — a confirmed dark and a confirmed matched (1C).
+- [x] One real MPA yields a spot-checked `violation_events.json` — a confirmed dark and a confirmed matched (1C — **✅ 2026-07-26, historical path**: Anacapa wake-vessel dark + BB PELAGIC matched at 2 s / 362 m; live-capture variant waits on 1A).
 - [x] `fishing_probability` is MPA-specific (3A — `--region-bbox`/`--wdpa-id`; live GFW call still 🏠).
 - [x] A batch driver runs the loop for a `--wdpa-id` (2A — `scan_violations.py`; live run still 🏠).
 - [x] An operator-facing ranked output exists (2B — `report_violations.py`).
