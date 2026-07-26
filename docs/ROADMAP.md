@@ -250,9 +250,9 @@ survives. The product cares about *mismatch precision* (which fusion improves), 
 ## Remaining TODO items (consolidated, 2026-07-23)
 
 The technical pipeline (Phases 0/2/3) is built and offline-tested (104 tests). What's left is grouped by
-what it needs. This consolidates the gaps flagged in the Executive Summary (`CLAUDE.md` → "Implementation
-status"), the phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLAN.md`, and `docs/AUDIT.md`
-— read those for detail; this is the single index.
+what it needs. This consolidates the gaps flagged in `CLAUDE.md`'s capability→code status table, the
+phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLAN.md`, and `docs/AUDIT.md` — read
+those for detail; this is the single index.
 
 ### 🏠 Do-from-home (need credentials / GPU — cannot run in the remote sandbox)
 - **Live-validate the AISStream + GFW calls + produce a first real violation.** Top priority — it
@@ -263,7 +263,7 @@ status"), the phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLA
   download (the `--csv <local file>` path already runs offline).
 
 ### 🟢 Feasible offline (buildable in the sandbox; not yet built)
-- **Alerting interface** — the Executive Summary's final promised output. Today `report_violations.py`
+- **Alerting interface** — the design proposal's final promised output. Today `report_violations.py`
   emits a ranked CSV/HTML; an alerts layer would filter high-`violation_score` / dark / IUU events into a
   digest (JSON/markdown/console, or a watch mode). Pure stdlib over `violation_events.json`.
 - **AIS-track MPA geofencing** — flag *cooperative* vessels transmitting from inside a no-take IUCN Ia/Ib
@@ -295,7 +295,7 @@ status"), the phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLA
   modalities don't mix (`docs/IMPROVEMENT_PLAN.md` cross-cutting).
 
 ### ⛔ Deliberately out of scope ($0-budget, local)
-The cloud-native stack in the Executive Summary's *Infrastructure Recommendations* (Kubernetes, Kafka /
+The cloud-native stack in the design proposal (Kubernetes, Kafka /
 Kinesis, PostgreSQL+PostGIS, Airflow, Prometheus/Grafana) and paid data (VMS, Spire satellite AIS,
 commercial VHR/SAR per-alert tasking). Recorded as the north-star vision, not a build target.
 

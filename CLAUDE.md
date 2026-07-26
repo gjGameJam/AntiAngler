@@ -186,13 +186,11 @@ The WDPA split-shapefile format is documented in `data/raw/WDPA/Shapefile_splitt
 
 ---
 
-# Executive Summary
+# Design proposal — north-star vision vs. what's built
 
-We propose a **real-time and batch pipeline** to detect likely fishing violations inside Marine Protected Areas (MPAs). The system fuses **AIS tracking**, **Global Fishing Watch (GFW) fishing-effort data**, and **satellite imagery (Sentinel-1 SAR and Sentinel-2 optical)** to identify vessels entering MPAs and assess their behavior. Key components: ingest AIS/VMS feeds and GFW APIs; preprocess tracks (cleaning, interpolation, indexing); intersect vessel positions with MPA geofences; infer fishing activity via GFW or local ML; cross-reference vessel identity with registries; score each "violation event" (presence confidence, fishing probability, violation likelihood); and optionally validate suspicious events with satellite images. The output is a ranked list of MPA intrusion events (with evidence and confidence) and an alerting interface. The design supports cloud-native deployment (containers, scalable storage), automatic monitoring, and extensibility (e.g. adding SAR-based dark-vessel detection later).
+**The goal:** a real-time + batch pipeline that flags likely fishing violations inside no-take MPAs by fusing **AIS**, **GFW fishing-effort/identity**, and **Sentinel-1 SAR + Sentinel-2 optical** imagery into a ranked list of intrusion events with evidence and confidence. The built system is a **$0-budget, local, pure-stdlib + free-API** implementation; the full aspirational stack (cloud-native infra — Kubernetes/Kafka/PostGIS/Airflow/Prometheus — plus AIS track reconstruction and an alerting UI) is the **north-star, deliberately out of scope**, tracked as TODOs in `docs/ROADMAP.md` → "Remaining TODO items", not what runs today.
 
-**Assumptions:** We assume global AIS visibility (satellite + terrestrial) with typical delays, as well as access to open Sentinel data. We assume processing scale on the order of millions of AIS messages/day and dozens of MPA polygons. We assume MPAs and vessel registries are static or slowly updating. Retention is flexible; e.g., raw AIS ~1 year, aggregated events ~5–10 years.
-
-**Implementation status (2026-07-23) — what of this summary is realized.** The built system is a **$0-budget, local, pure-stdlib + free-API** implementation (no cloud stack — the *Infrastructure Recommendations* section below is the north-star vision, not what runs). Each capability the summary promises maps to code as follows; every unbuilt item is tracked in `docs/ROADMAP.md` → "Remaining TODO items".
+**Capability → code status** (every unbuilt item is a ROADMAP TODO):
 
 | Executive-summary capability | Status | Where / note |
 |---|---|---|
@@ -203,54 +201,25 @@ We propose a **real-time and batch pipeline** to detect likely fishing violation
 | Intersect positions with MPA geofences | ◑ partial | detections tagged `inside_mpa` (`detect_boats.py`); geofencing *AIS-reported* vessels is a ROADMAP TODO |
 | Infer fishing activity | ✅ (GFW) | `gfw_vessels.py` `fishing_hours` + `fishing_probability`; a local speed-based heuristic is a ROADMAP TODO |
 | Cross-reference vessel identity | ✅ built | `gfw_vessels.py` (MMSI→name/flag/gear/imo, IUU flag) |
-| Score each violation event | ✅ built | `fuse_violations.py` `violation_score` (see the corrected formula under *Geofence Intersection & Event Detection*) |
+| Score each violation event | ✅ built | `fuse_violations.py` `violation_score` (see the corrected formula under *Violation scoring* below) |
 | Validate with satellite imagery | ✅ built | `sat_fetch.py` + `detect_boats.py` (S2 optical live; S1 SAR provider built, detector `best_sar.pt` pending); cross-modality S1×S2 is a ROADMAP TODO |
 | Ranked list of events + evidence/confidence | ✅ built | `report_violations.py` (ranked CSV + self-contained HTML); one-shot via `scan_violations.py` |
 | Alerting interface | ⬜ not built | ROADMAP TODO (feasible offline over `violation_events.json`) |
-| Cloud-native deploy / monitoring / scale | ⛔ out of scope | deliberately not pursued ($0-budget, local) — *Infrastructure Recommendations* is aspirational |
+| Cloud-native deploy / monitoring / scale | ⛔ out of scope | deliberately not pursued ($0-budget, local); the cloud stack is aspirational (see *Satellite validation & remaining build-out* below) |
 
 **Live-validation** of the AISStream/GFW calls and the **SAR detector** are 🏠 do-from-home (need credentials / GPU); see `docs/PHASE3_PLAN.md` and `docs/ROADMAP.md` → "Remaining TODO items".
 
 ---
 
-# Data Sources and Access Methods
+# Pipeline shape
 
-| **Data Stream** | **Description & Content** | **Access Method** | **Use in Pipeline** |
-|---|---|---|---|
-| **AIS** | Vessel-broadcast GPS (lat,lon), course, speed, identity (MMSI/IMO/call sign). High-frequency "breadcrumbs" of vessel movement. | Real-time feeds (MarineCadastre NOAA, ORCA network, AIS-Hub) or downloaded archives (hourly CSVs) | Core trajectory data. Ingest raw tracks; build vessel routes. Input to geofence and behavior models. |
-| **VMS** | Government-tracked vessel locations (typically large fishing vessels) with ID. | Available only via partnerships (NOAA-Fisheries, RFMOs). Not public. | Augments AIS for compliant fleets. Can directly flag fishing vessels. |
-| **GFW AIS-derived Fishing Effort** | Inferred fishing activity (hours, events) and vessel presence from AIS patterns. Includes gear type, timestamps. | GFW 4WINGS API (`/v3/4wings/report`). `gfwr` Python package or REST (requires token). | Provides fishing probability/effort for segments. Integrated into event scoring. |
-| **GFW Vessel Registry & Insights** | Aggregated vessel metadata (IMO/MMSI, name, flag, type, gear, owner) from ~40 registries; AIS-off events via Insights API. | GFW Vessel API (`/v3/vessels`) and Insights API (`/v3/insights/vessels`). Requires token. | Resolve vessel identity (MMSI→IMO/name), detect AIS-dark events, flag known IUU listings. |
-| **Sentinel-2 (Optical)** | 10 m multispectral optical satellite images (twin satellites, 5-day revisit). Cloud-limited. | ESA Copernicus APIs, Sentinel Hub, AWS/GCP. Python: `sentinelsat`, `sentinelhub-py`, or Google Earth Engine. | Validate events: spot actual vessels in MPA. Provides visual evidence (with ML-based vessel detection). |
-| **Sentinel-1 (SAR)** | C-band SAR images (all-weather, day/night, global 6-day revisit). Detects large metallic objects on surface. | ESA / NASA (ASF DAAC) via APIs. AWS Open SAR (GDAL). | (Future) Detect AIS-dark ships. After events, search SAR footprints to verify unreported ships. |
-| **Oceanographic Data** | Environmental layers: SST, chlorophyll-a, bathymetry, etc. Satellite-derived or model (MODIS, VIIRS, NOAA). | NOAA ERDDAP, Copernicus. APIs or bulk NetCDF downloads. | Auxiliary features: enrich behavior model or risk scores. |
-| **MPA Geofences** | Polygons defining boundaries of MPAs. Includes level of protection. | GFW `public-mpa-all` dataset via API or WDPA (protectedplanet.net). Download as GeoJSON/Parquet. | Used for point-in-polygon checks. Tag vessel trajectories/events with which MPA they intersect. |
+`DETECT (S2 optical live · S1 SAR built) → CORRELATE vs AIS/GFW → CONFIRM (dark? S1×S2 + human review) → ranked violation_events`. The per-stream data sources (AIS/VMS/GFW/Sentinel-1/Sentinel-2/MPA geofences) and their access methods are covered by the **Script Architecture** table and **Data Layout** section above; the phased target architecture is in `docs/ROADMAP.md`.
 
 ---
 
-# System Architecture and Data Flow
+# Violation scoring (as implemented)
 
-```
-Data Ingestion → Processing → Event Detection → Satellite Validation → Output
-```
-
-- **Data Ingestion:** AIS/VMS streams → raw datastore (message queue or data lake). Satellite imagery fetched on-demand or scheduled batch. GFW API outputs pulled periodically (daily/weekly). Oceanographic data loaded into geo-database.
-- **Processing:** Raw AIS is cleaned (remove invalid, duplicate, interpolate gaps), then segmented into vessel trajectories. Tracks feed into GeofenceCheck (point-in-polygon against MPA shapes) and into a BehaviorModel that uses AIS features (e.g. speed patterns) to detect fishing, or directly queries GFW fishing-effort.
-- **Event Detection:** When a track intersects an MPA, an Event is created (with start/end times). Features computed: time inside, distance from shore, AIS-off events, etc. Each event is scored (presence_confidence, fishing_probability, overall violation_score).
-- **Satellite Validation:** SAR and optical image detectors run concurrently. Detections are matched to AIS tracks by time/space. This can confirm the vessel's presence or reveal a "ghost ship" (no AIS).
-- **Output:** Violation events (with vessel info, MPA, times, scores, evidence tags) stored and exposed via an API or dashboard.
-
----
-
-# Geofence Intersection & Event Detection
-
-**Event Schema — each violation candidate includes:**
-- `vessel_id`, `MMSI/IMO`, `vessel_name`, `flag`, `gear_type`
-- `mpa_id`, `mpa_name`
-- `entry_time`, `exit_time`, `duration_hours`
-- `distance_from_port_km`, `presence_confidence`
-- `fishing_hours`, `fishing_probability`, `violation_score`
-- `evidence` — list of data sources confirming the event (e.g. `["AIS", "GFW", "Sentinel-2"]`)
+Each violation candidate carries the fields pinned in the `docs/PIPELINE.md` `violation_events.json` schema (`vessel_id`/`MMSI`/`vessel_name`/`flag`/`gear_type`, `mpa_id`/`mpa_name`, `presence_confidence`, `fishing_hours`/`fishing_probability`, `violation_score`, `evidence`).
 
 **Scoring — original proposal formula (kept for the record):**
 ```
@@ -265,57 +234,8 @@ violation_score = presence_confidence * fishing_probability * (fishing_hours / (
 
 ---
 
-# Satellite Validation
+# Satellite validation & remaining build-out
 
-| Feature | Sentinel-1 (SAR) | Sentinel-2 (Optical) |
-|---|---|---|
-| **Coverage** | All-weather, day/night. ~6-day revisit (global). | 5-day revisit (twin satellites), but daytime only and no cloud penetration. |
-| **Resolution** | ~10 m (C-band) – suitable for large vessels. | 10 m (RGB/NIR bands); can detect smaller vessels (~5–10 m) with AI. |
-| **Detects** | Reflective objects (ships), including dark ones, but no ID info. | Bright hulls in visible spectrum. |
-| **Best For** | Confirming untracked/dark vessels, large trawlers at night. | Confirming tracked vessels, small boats in daylight, creating heatmaps. |
+**Two validation modalities:** Sentinel-1 SAR is all-weather day/night (~6-day revisit), catches dark/large metallic hulls but carries no vessel ID; Sentinel-2 optical is daytime + cloud-limited (5-day revisit), confirms tracked vessels + smaller boats in daylight. Both are ~10 m GSD (marginal below ~15 m) — details in the `sat_fetch.py` provider notes above.
 
----
-
-# Output Schema
-
-```sql
-CREATE TABLE violation_events (
-  event_id SERIAL PRIMARY KEY,
-  vessel_id UUID REFERENCES vessels(vessel_id),
-  mpa_id INTEGER,
-  entry_time TIMESTAMP,
-  exit_time TIMESTAMP,
-  duration_hours FLOAT,
-  presence_confidence FLOAT,
-  fishing_hours FLOAT,
-  fishing_probability FLOAT,
-  violation_score FLOAT,
-  evidence JSONB,
-  created_at TIMESTAMP DEFAULT now()
-);
-```
-
----
-
-# Infrastructure Recommendations
-
-- **Compute:** Containerized microservices (Python) on Kubernetes or serverless. AWS EKS or GCP GKE for scalable tasks.
-- **Storage:** Object storage (S3/GCS) for raw AIS dumps and satellite images. PostgreSQL+PostGIS for spatial queries. Parquet on object storage for batch analysis.
-- **Streaming:** Kafka/Kinesis for AIS ingestion at scale.
-- **Orchestration:** Apache Airflow / Prefect / Dagster for ETL flows (daily GFW pulls, AIS batch jobs).
-- **Monitoring:** Prometheus/Grafana for pipeline health (ingestion lag, event rates, error rates). Structured JSON logging.
-
----
-
-# Implementation Checklist
-
-- [ ] **Data Integration:** Set up AIS ingestion (stream or batch) into raw store. Load MPA boundaries into spatial DB.
-- [ ] **Preprocessing Pipeline:** Implement AIS cleaning/dedup logic and track reconstruction.
-- [ ] **Geofence Logic:** Code MPA intersection and entry/exit detection. Unit test with synthetic trajectories.
-- [ ] **Behavior Scoring:** Hook in GFW API calls to fetch fishing hours by vessel. Integrate speed-based fishing heuristic.
-- [ ] **Identity Service:** Implement `IdentityResolver` with GFW Vessel API lookup.
-- [ ] **Event Database:** Design and create `violation_events` table.
-- [ ] **Output & Alerts:** Develop API or dashboard to browse events. Configure alert triggers for high scores.
-- [ ] **Sentinel Proof-of-Concept:** Fetch Sentinel-2 for a test MPA/time, run a simple ship detection, validate against known vessel.
-- [ ] **SAR Integration (Future):** Prototype dark-vessel detection by matching AIS gap events to SAR detections.
-- [ ] **Monitoring & Testing:** Add logging/metrics to each component. Write end-to-end tests.
+The aspirational parts of the original proposal — the SQL `violation_events` table (the authoritative emitted schema is the `violation_events.json` pinned in `docs/PIPELINE.md`), the **cloud-native infra** (Kubernetes/Kafka/PostGIS/Airflow/Prometheus), and the **implementation checklist** — are the north-star / remaining build-out, tracked in `docs/ROADMAP.md` → "Remaining TODO items". They are not restated here; git history has the full original proposal.
