@@ -143,7 +143,7 @@ def collect_rows(event_files, dark_only=False, min_score=0.0, top=0):
 
 def rows_to_csv(rows):
     buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, extrasaction="ignore")
+    w = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, extrasaction="ignore", lineterminator="\n")
     w.writeheader()
     for r in rows:
         w.writerow(r)
