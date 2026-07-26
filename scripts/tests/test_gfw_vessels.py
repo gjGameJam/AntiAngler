@@ -13,7 +13,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent
+TESTS_DIR = Path(__file__).resolve().parent
+SCRIPTS_DIR = TESTS_DIR.parent
+FIXTURES = TESTS_DIR / "fixtures"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import gfw_vessels as gv  # noqa: E402
@@ -65,6 +67,21 @@ class TestIdentity(unittest.TestCase):
             {"ssvid": "111", "geartypes": [{"name": "drifting_longlines"}]}]}]}
         self.assertEqual(gv.normalize_identity(resp, "111")["geartype"], "drifting_longlines")
 
+    def test_live_v3_shape_picks_fresh_identity_and_combined_gear(self):
+        # Real /v3/vessels/search response captured live 2026-07-26 (MMSI 701154000): a junk
+        # NO_MATCH identity cluster (36 messages, shipname null) sits beside the live vessel
+        # (3.5M messages, fresher transmissionDateTo), and geartype lives at the ENTRY level in
+        # combinedSourcesInfo[].geartypes[].name. The old first-match pick returned the junk
+        # cluster (name None, gear None) and its stale vesselId found 0 fishing events.
+        resp = json.loads((FIXTURES / "gfw_search_response.json").read_text(encoding="utf-8"))
+        idv = gv.normalize_identity(resp, "701154000")
+        self.assertEqual(idv["vessel_id"], "775c3a6b1-1cd1-ebba-9892-3a78cfba306a")
+        self.assertEqual(idv["shipname"], "ERIN BRUCE II")
+        self.assertEqual(idv["flag"], "ARG")
+        self.assertEqual(idv["geartype"], "TRAWLERS")
+        self.assertEqual(idv["imo"], "9985564")
+        self.assertEqual(idv["callsign"], "LW 4741")
+
     def test_empty_response_yields_stub(self):
         idv = gv.normalize_identity({"entries": []}, "111")
         self.assertEqual(idv["mmsi"], "111")
@@ -97,6 +114,15 @@ class TestFishing(unittest.TestCase):
 
 
 class TestInsights(unittest.TestCase):
+    def test_live_v3_insights_shape(self):
+        # Real POST /v3/insights/vessels response captured live 2026-07-26 (201, one flat object):
+        # counters live under periodSelectedCounters; an empty iuuVesselList is a definitive False.
+        resp = json.loads((FIXTURES / "gfw_insights_response.json").read_text(encoding="utf-8"))
+        ins = gv.normalize_insights(resp, "701154000", "775c3a6b1-1cd1-ebba-9892-3a78cfba306a")
+        self.assertIs(ins["iuu_listed"], False)
+        self.assertEqual(ins["ais_off_events"], 0)
+        self.assertEqual(ins["fishing_in_no_take_mpa"], 0)
+
     def test_iuu_nested_true(self):
         resp = {"vessels": [{"vesselId": "gfw-abc",
                              "iuuIndicator": {"valueInThePeriod": True},

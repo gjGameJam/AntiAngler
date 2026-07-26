@@ -202,34 +202,59 @@ def _geartype(entry):
     return str(g) if g not in (None, "") else None
 
 
+def _freshness(block):
+    """Sort key for competing identity blocks: most recent transmission first, then the identity
+    with the most positions/messages. An MMSI can resolve to several identity clusters (verified
+    live 2026-07-26: a junk NO_MATCH cluster with 36 messages sat beside the real vessel with
+    3.5M); recency + volume reliably selects the live identity."""
+    return (str(block.get("transmissionDateTo") or ""),
+            block.get("positionsCounter") or 0,
+            block.get("messagesCounter") or 0)
+
+
 def normalize_identity(search_json, mmsi):
     """GFW Vessels-search response -> a compact identity dict for one MMSI. Tolerant of the
-    selfReportedInfo/registryInfo entry shapes; picks the entry whose ssvid matches the MMSI (else
-    the first). Returns {mmsi, vessel_id, shipname, flag, geartype, imo, callsign} (fields may be None)."""
+    selfReportedInfo/registryInfo entry shapes; among blocks whose ssvid matches the MMSI it picks
+    the freshest/busiest identity (see _freshness). geartype lives at the ENTRY level in
+    combinedSourcesInfo[].geartypes[].name (v3 live shape), keyed by vesselId, with the block's own
+    fields as fallback. Returns {mmsi, vessel_id, shipname, flag, geartype, imo, callsign}."""
     entries = search_json.get("entries", search_json) if isinstance(search_json, dict) else search_json
     if not isinstance(entries, list):
         entries = []
-    # flatten candidate identity blocks (self-reported first, then registry)
-    blocks = []
+    # flatten candidate identity blocks, keeping each block's parent entry for the gear lookup
+    candidates = []   # (block, entry)
     for e in entries:
         if not isinstance(e, dict):
             continue
         sri = e.get("selfReportedInfo") or []
         reg = e.get("registryInfo") or []
-        blocks.extend(b for b in sri if isinstance(b, dict))
-        blocks.extend(b for b in reg if isinstance(b, dict))
+        candidates.extend((b, e) for b in sri if isinstance(b, dict))
+        candidates.extend((b, e) for b in reg if isinstance(b, dict))
         if not sri and not reg:
-            blocks.append(e)   # some shapes put identity fields directly on the entry
-    if not blocks:
+            candidates.append((e, e))   # some shapes put identity fields directly on the entry
+    if not candidates:
         return {"mmsi": str(mmsi), "vessel_id": None, "shipname": None, "flag": None,
                 "geartype": None, "imo": None, "callsign": None}
-    match = next((b for b in blocks if str(b.get("ssvid", b.get("mmsi", ""))) == str(mmsi)), blocks[0])
+    matches = [c for c in candidates
+               if str(c[0].get("ssvid", c[0].get("mmsi", ""))) == str(mmsi)] or candidates
+    match, entry = max(matches, key=lambda c: _freshness(c[0]))
+    vessel_id = _first(match.get("vesselId"), match.get("id"))
+    geartype = _geartype(match)
+    if geartype is None:
+        for src in entry.get("combinedSourcesInfo") or []:
+            if not isinstance(src, dict):
+                continue
+            if vessel_id and src.get("vesselId") not in (None, vessel_id):
+                continue
+            geartype = _geartype(src)
+            if geartype:
+                break
     return {
         "mmsi": str(mmsi),
-        "vessel_id": _first(match.get("vesselId"), match.get("id")),
+        "vessel_id": vessel_id,
         "shipname": _first(match.get("shipname"), match.get("name")),
         "flag": match.get("flag"),
-        "geartype": _geartype(match),
+        "geartype": geartype,
         "imo": _first(match.get("imo"), match.get("imoNumber")),
         "callsign": match.get("callsign"),
     }
@@ -352,10 +377,28 @@ def _deep_find_bool(obj, key_substrings):
     return found
 
 
+def _counter(block, counters_key, fallback_list_key):
+    """Read an int from block.periodSelectedCounters[counters_key], else len(block[fallback_list_key])."""
+    if not isinstance(block, dict):
+        return None
+    pc = block.get("periodSelectedCounters")
+    if isinstance(pc, dict) and counters_key in pc:
+        try:
+            return int(pc.get(counters_key) or 0)
+        except (TypeError, ValueError):
+            pass
+    lst = block.get(fallback_list_key)
+    return len(lst) if isinstance(lst, list) else None
+
+
 def normalize_insights(insights_json, mmsi=None, vessel_id=None):
-    """GFW Insights response -> {iuu_listed, ais_off_events, fishing_in_no_take_mpa}. Very tolerant:
-    the Insights v3 shape is nested and evolving, so this searches defensively and returns None for
-    any indicator it can't confidently read rather than guessing wrong."""
+    """GFW Insights response -> {iuu_listed, ais_off_events, fishing_in_no_take_mpa}.
+
+    Live v3 shape (verified 2026-07-26; POST answers 201 with one flat object per request):
+    gap.periodSelectedCounters.eventsGapOff, apparentFishing.periodSelectedCounters.eventsInNoTakeMPAs,
+    vesselIdentity.iuuVesselList{valuesInThePeriod, totalTimesListed}. That path is read explicitly
+    (so an empty IUU list is a definitive False); anything else falls back to the fuzzy deep search,
+    which returns None for indicators it can't confidently read."""
     doc = insights_json
     if isinstance(insights_json, dict):
         vessels = insights_json.get("vessels")
@@ -363,9 +406,20 @@ def normalize_insights(insights_json, mmsi=None, vessel_id=None):
             doc = next((v for v in vessels
                         if str(v.get("vesselId", "")) == str(vessel_id)
                         or str(v.get("ssvid", "")) == str(mmsi)), vessels[0])
-    iuu = _deep_find_bool(doc, ["iuu"])
-    ais_off = _find_count(doc, ["aisoff", "ais_off", "gap"])
-    fishing_mpa = _find_count(doc, ["notakempa", "no_take", "notake"])
+    iuu = ais_off = fishing_mpa = None
+    if isinstance(doc, dict):
+        vi, gap, fishing = doc.get("vesselIdentity"), doc.get("gap"), doc.get("apparentFishing")
+        if isinstance(vi, dict) and isinstance(vi.get("iuuVesselList"), dict):
+            iuu = _any_truthy(vi["iuuVesselList"])
+        ais_off = _counter(gap, "eventsGapOff", "aisOff")
+        fishing_mpa = _counter(fishing, "eventsInNoTakeMPAs", "eventsInNoTakeMpas")
+    # any indicator the explicit path could not read falls back to the fuzzy deep search
+    if iuu is None:
+        iuu = _deep_find_bool(doc, ["iuu"])
+    if ais_off is None:
+        ais_off = _find_count(doc, ["aisoff", "ais_off", "gap"])
+    if fishing_mpa is None:
+        fishing_mpa = _find_count(doc, ["notakempa", "no_take", "notake"])
     return {"iuu_listed": iuu,
             "ais_off_events": ais_off,
             "fishing_in_no_take_mpa": fishing_mpa}
@@ -444,7 +498,7 @@ def _headers(token):
 
 def search_vessel(token, mmsi, dataset, limit):
     """GET /v3/vessels/search?query=<mmsi> - identity resolution. Thin shell; parsing is
-    normalize_identity(). Verify endpoint/params against GFW v3 docs on first real run."""
+    normalize_identity(). Endpoint + params verified against the live v3 API 2026-07-26."""
     requests = _requests()
     params = {"query": str(mmsi), "datasets[0]": dataset, "limit": limit}
     r = requests.get(f"{GFW_BASE}/v3/vessels/search", headers=_headers(token), params=params, timeout=120)
@@ -453,19 +507,23 @@ def search_vessel(token, mmsi, dataset, limit):
 
 
 def fishing_events(token, vessel_id, dataset, start, end):
-    """GET /v3/events (fishing) for one vesselId in [start,end]. Parsing is summarize_fishing()."""
+    """GET /v3/events (fishing) for one vesselId in [start,end]. Parsing is summarize_fishing().
+    Verified live 2026-07-26: the API 422s if `limit` is sent without `offset`."""
     requests = _requests()
     params = {"datasets[0]": dataset, "vessels[0]": vessel_id,
-              "start-date": start, "end-date": end, "limit": 500}
+              "start-date": start, "end-date": end, "limit": 500, "offset": 0}
     r = requests.get(f"{GFW_BASE}/v3/events", headers=_headers(token), params=params, timeout=120)
     r.raise_for_status()
     return r.json()
 
 
 def vessel_insights(token, vessel_id, dataset_identity, start, end):
-    """POST /v3/insights/vessels for one vesselId. Parsing is normalize_insights()."""
+    """POST /v3/insights/vessels for one vesselId. Parsing is normalize_insights().
+    Verified live 2026-07-26: allowed includes are [FISHING, GAP, COVERAGE,
+    VESSEL-IDENTITY-FLAG-CHANGES, VESSEL-IDENTITY-IUU-VESSEL-LIST, VESSEL-IDENTITY-MOU-LIST]
+    (the old VESSEL-IDENTITY-IUU 422s); success is a 201 with one flat object."""
     requests = _requests()
-    body = {"includes": ["FISHING", "GAP", "VESSEL-IDENTITY-IUU"],
+    body = {"includes": ["FISHING", "GAP", "VESSEL-IDENTITY-IUU-VESSEL-LIST"],
             "startDate": start, "endDate": end,
             "vessels": [{"vesselId": vessel_id, "datasetId": dataset_identity}]}
     r = requests.post(f"{GFW_BASE}/v3/insights/vessels", headers=_headers(token), json=body, timeout=120)

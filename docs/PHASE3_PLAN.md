@@ -58,7 +58,17 @@ is what "finish Phase 3" means, and it drives the ordering below.
 - **Acceptance:** a positions file that `fuse_violations.py --ais` reads without error over a real AOI.
 - **Effort:** S (mostly account setup).
 
-### 1B. GFW live verification  ☐  *(highest drift risk in the whole phase)*
+### 1B. GFW live verification  ✅ DONE (2026-07-26, at home)  *(was the highest drift risk)*
+
+> **Result:** all three endpoints verified against the live v3 API with active ARG trawlers
+> (ERIN BRUCE II / MISS TIDE, harvested from a live 4WINGS pull — `gfw_fetch.py` re-confirmed 2xx
+> post-hardening). Three corrections landed, each locked by a committed real-response fixture:
+> (1) `/v3/events` 422s unless `offset` accompanies `limit`; (2) an MMSI resolves to several
+> identity clusters — pick the freshest/busiest (`transmissionDateTo`/counters), gear lives in
+> entry-level `combinedSourcesInfo[].geartypes[].name`; (3) insights include is
+> `VESSEL-IDENTITY-IUU-VESSEL-LIST` → 201 flat object. The 3A region filter was verified
+> ground-truth-correct live (one vessel's fishing inside a shelf bbox, the other's outside,
+> matching their 4WINGS effort cells).
 - **Do:** `GFW_API_TOKEN` in `.env` (same token `gfw_fetch.py` uses); `gfw_vessels.py --mmsi <known
   fishing MMSI> --dry-run` then without `--dry-run`; add `--insights` on a second run.
 - **Verify each endpoint against the live v3 API and fix the isolated parser if the shape differs:**
@@ -180,7 +190,7 @@ is what "finish Phase 3" means, and it drives the ordering below.
 
 ## Definition of done for Phase 3
 
-- [ ] AISStream + GFW calls verified live once; any v3 shape drift fixed in the (isolated) parsers (1A, 1B).
+- [ ] AISStream + GFW calls verified live once; any v3 shape drift fixed in the (isolated) parsers (1A, 1B — **GFW half ✅ 2026-07-26**, three corrections landed; AISStream half waits on the free key).
 - [ ] One real MPA yields a spot-checked `violation_events.json` — a confirmed dark and a confirmed matched (1C).
 - [x] `fishing_probability` is MPA-specific (3A — `--region-bbox`/`--wdpa-id`; live GFW call still 🏠).
 - [x] A batch driver runs the loop for a `--wdpa-id` (2A — `scan_violations.py`; live run still 🏠).

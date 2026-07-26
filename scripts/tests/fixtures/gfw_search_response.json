@@ -1,0 +1,142 @@
+{
+  "limit": 5,
+  "since": null,
+  "total": 2,
+  "entries": [
+    {
+      "dataset": "public-global-vessel-identity:v4.0",
+      "registryInfoTotalRecords": 0,
+      "registryInfo": [],
+      "registryOwners": [],
+      "combinedSourcesInfo": [
+        {
+          "vesselId": "744788887-779f-3b0c-f458-2d421c6c5b12",
+          "geartypes": [
+            {
+              "name": "TRAWLERS",
+              "source": "COMBINATION_OF_REGISTRY_AND_AIS_INFERRED_NN_INFO",
+              "yearFrom": 2024,
+              "yearTo": 2026
+            }
+          ],
+          "shiptypes": [
+            {
+              "name": "FISHING",
+              "source": "COMBINATION_OF_REGISTRY_AND_AIS_INFERRED_NN_INFO",
+              "yearFrom": 2024,
+              "yearTo": 2026
+            }
+          ]
+        }
+      ],
+      "selfReportedInfo": [
+        {
+          "id": "744788887-779f-3b0c-f458-2d421c6c5b12",
+          "ssvid": "701154000",
+          "shipname": null,
+          "nShipname": null,
+          "flag": "ARG",
+          "callsign": null,
+          "imo": null,
+          "messagesCounter": 36,
+          "positionsCounter": 36,
+          "sourceCode": [
+            "AIS"
+          ],
+          "matchFields": "NO_MATCH",
+          "transmissionDateFrom": "2024-09-06T07:59:49Z",
+          "transmissionDateTo": "2026-02-13T15:42:01Z"
+        }
+      ]
+    },
+    {
+      "dataset": "public-global-vessel-identity:v4.0",
+      "registryInfoTotalRecords": 0,
+      "registryInfo": [],
+      "registryOwners": [],
+      "combinedSourcesInfo": [
+        {
+          "vesselId": "3f9985ccd-de92-703a-6e7a-3a2b6cf9c625",
+          "geartypes": [
+            {
+              "name": "TRAWLERS",
+              "source": "COMBINATION_OF_REGISTRY_AND_AIS_INFERRED_NN_INFO",
+              "yearFrom": 2023,
+              "yearTo": 2026
+            }
+          ],
+          "shiptypes": [
+            {
+              "name": "FISHING",
+              "source": "COMBINATION_OF_REGISTRY_AND_AIS_INFERRED_NN_INFO",
+              "yearFrom": 2023,
+              "yearTo": 2026
+            }
+          ]
+        },
+        {
+          "vesselId": "775c3a6b1-1cd1-ebba-9892-3a78cfba306a",
+          "geartypes": [
+            {
+              "name": "TRAWLERS",
+              "source": "COMBINATION_OF_REGISTRY_AND_AIS_INFERRED_NN_INFO",
+              "yearFrom": 2023,
+              "yearTo": 2026
+            }
+          ],
+          "shiptypes": [
+            {
+              "name": "FISHING",
+              "source": "COMBINATION_OF_REGISTRY_AND_AIS_INFERRED_NN_INFO",
+              "yearFrom": 2023,
+              "yearTo": 2026
+            }
+          ]
+        }
+      ],
+      "selfReportedInfo": [
+        {
+          "id": "775c3a6b1-1cd1-ebba-9892-3a78cfba306a",
+          "ssvid": "701154000",
+          "shipname": "ERIN BRUCE II",
+          "nShipname": "ERINBRUCE2",
+          "flag": "ARG",
+          "callsign": "LW 4741",
+          "imo": "9985564",
+          "messagesCounter": 3559654,
+          "positionsCounter": 435702,
+          "sourceCode": [
+            "AIS"
+          ],
+          "matchFields": "SEVERAL_FIELDS",
+          "transmissionDateFrom": "2023-08-14T08:51:47Z",
+          "transmissionDateTo": "2026-07-24T23:59:58Z"
+        },
+        {
+          "id": "3f9985ccd-de92-703a-6e7a-3a2b6cf9c625",
+          "ssvid": "701154000",
+          "shipname": "ERIN BRUCE II",
+          "nShipname": "ERINBRUCE2",
+          "flag": "ARG",
+          "callsign": "LW4741",
+          "imo": "9985564",
+          "messagesCounter": 2514397,
+          "positionsCounter": 1289534,
+          "sourceCode": [
+            "AIS"
+          ],
+          "matchFields": "SEVERAL_FIELDS",
+          "transmissionDateFrom": "2023-08-17T11:40:02Z",
+          "transmissionDateTo": "2026-04-13T12:59:30Z"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "query": "701154000",
+    "normalizedQuery": "701154000",
+    "didYouMean": {
+      "shipname": {}
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "period": {
+    "startDate": "2026-07-10",
+    "endDate": "2026-07-20"
+  },
+  "vesselIdsWithoutIdentity": null,
+  "gap": {
+    "datasets": [
+      "public-global-gaps-events:v4.0"
+    ],
+    "periodSelectedCounters": {
+      "events": 0,
+      "eventsGapOff": 0
+    },
+    "aisOff": []
+  },
+  "apparentFishing": {
+    "datasets": [
+      "public-global-fishing-events:v4.0"
+    ],
+    "periodSelectedCounters": {
+      "events": 12,
+      "eventsInRFMOWithoutKnownAuthorization": 0,
+      "eventsInNoTakeMPAs": 0
+    },
+    "eventsInRfmoWithoutKnownAuthorization": [],
+    "eventsInNoTakeMpas": []
+  },
+  "vesselIdentity": {
+    "datasets": [
+      "public-global-vessel-identity:v3.0"
+    ],
+    "iuuVesselList": {
+      "valuesInThePeriod": [],
+      "totalTimesListed": 0,
+      "totalTimesListedInThePeriod": 0
+    }
+  }
+}
