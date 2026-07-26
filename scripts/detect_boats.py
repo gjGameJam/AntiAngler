@@ -54,10 +54,11 @@ def parse_args():
     p.add_argument("--weights", type=Path, default=Path(env_or("DET_WEIGHTS", str(DEFAULT_WEIGHTS))),
                    help="YOLOv8 .pt weights. Defaults to the in-repo promoted model "
                         "(data/training/weights/best.pt).")
-    p.add_argument("--conf", type=float, default=float(env_or("DET_CONF", 0.15)),
-                   help="Confidence threshold. Default 0.15 = recall-leaning operating point: open-ocean "
-                        "recall is low, so favour catching more vessels (stage 3 / AIS-mismatch filters the "
-                        "extra false positives). Re-sweep with conf_sweep.py after each retrain to confirm.")
+    p.add_argument("--conf", type=float, default=float(env_or("DET_CONF", 0.20)),
+                   help="Confidence threshold. Default 0.20 = the finetune-bigship model's recall-leaning "
+                        "operating point (2026-07-26 sweep: Pareto-dominates the old 0.15 deploy on every "
+                        "holdout metric; F1 peak is 0.25 but stage 3 / AIS-mismatch filters the extra FPs). "
+                        "Re-sweep with conf_sweep.py after each retrain to confirm.")
     p.add_argument("--imgsz", type=int, default=int(env_or("DET_IMGSZ", 1024)),
                    help="Model inference size. Default 1024: the promoted model is trained at 1024, and "
                         "upscaling the 640 chips (1-5 px vessels -> 2-10 px) is the dominant recall lever.")
