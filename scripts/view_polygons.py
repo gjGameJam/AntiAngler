@@ -30,8 +30,11 @@ def save_figure_atomic(fig, save_path):
     failure."""
     save_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = save_path.with_name(save_path.name + ".tmp")
+    # savefig infers the format from the filename, and ".tmp" is not a format —
+    # pin it to the real target's suffix.
+    fmt = save_path.suffix.lstrip(".").lower() or "png"
     try:
-        fig.savefig(tmp, dpi=150, bbox_inches="tight")
+        fig.savefig(tmp, dpi=150, bbox_inches="tight", format=fmt)
         tmp.replace(save_path)
     except BaseException:
         try:
