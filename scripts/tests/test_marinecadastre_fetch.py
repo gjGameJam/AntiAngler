@@ -55,6 +55,19 @@ class TestTimeAndRow(unittest.TestCase):
         self.assertEqual(rec["cog"], 180.0)
         self.assertEqual(rec["name"], "NEPTUNE")
 
+    def test_sentinel_sog_cog_map_to_null(self):
+        # AIS not-available sentinels (SOG 102.3 kn, COG 360 deg) must become null so the
+        # matcher falls back to --max-speed-kn (first real fusion: a moored vessel's raw 102.3
+        # built a bogus 92 km feasible envelope).
+        rec = mc.normalize_row({"mmsi": "1", "basedatetime": "2026-07-14T10:00:00",
+                                "lat": "37.0", "lon": "25.0", "sog": "102.3", "cog": "360.0"})
+        self.assertIsNone(rec["sog"])
+        self.assertIsNone(rec["cog"])
+        rec = mc.normalize_row({"mmsi": "1", "basedatetime": "2026-07-14T10:00:00",
+                                "lat": "37.0", "lon": "25.0", "sog": "11.4", "cog": "65"})
+        self.assertEqual(rec["sog"], 11.4)
+        self.assertEqual(rec["cog"], 65.0)
+
     def test_normalize_row_rejects_bad(self):
         self.assertIsNone(mc.normalize_row({"mmsi": "1", "lat": "37", "lon": "25"}))          # no time
         self.assertIsNone(mc.normalize_row({"mmsi": "1", "basedatetime": "2026-07-14T00:00:00",

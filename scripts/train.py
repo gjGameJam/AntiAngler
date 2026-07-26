@@ -53,7 +53,9 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--batch", type=int, default=16)
     p.add_argument("--imgsz", type=int, default=640)
-    p.add_argument("--device", default="cpu", help="'cpu', or a CUDA index like '0' if a GPU is present.")
+    p.add_argument("--device", default=None,
+                   help="'cpu', or a CUDA index like '0'. Default: auto - CUDA 0 if available, else cpu "
+                        "(the old always-cpu default silently ignored an idle GPU).")
     p.add_argument("--name", default="finetune",
                    help="Run dir under data/training/runs/. Auto-increments unless --force.")
     p.add_argument("--lr0", type=float, default=None,
@@ -103,6 +105,10 @@ def main():
     optimizer = args.optimizer
     if optimizer == "auto" and lr0 is not None:
         optimizer = "SGD"
+
+    if args.device is None:
+        import torch
+        args.device = "0" if torch.cuda.is_available() else "cpu"
 
     print("TRAIN")
     print(f"  mode      : {'FINE-TUNE' if is_finetune else 'FROM-SCRATCH'}")

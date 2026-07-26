@@ -99,6 +99,21 @@ class TestVerificationCases(unittest.TestCase):
         self.assertEqual(e["mmsi"], "111")
         self.assertLess(e["ais_match"]["distance_m"], 500)
 
+    def test_fresher_ping_supersedes_stale_far_ping(self):
+        # First real fusion (Anacapa 2026-07-26): a vessel moored ~20 km away pinged 29 min
+        # before the scene (huge feasible envelope) AND 2 min before it (tiny envelope) from the
+        # same dock. Per vessel only the nearest-in-time ping is admissible, so the stale ping
+        # must not produce a match -> the detection stays DARK.
+        run = make_run(self._tmp, [{"confidence": 0.9, "centroid_wgs84": [25.0, 37.0],
+                                    "bbox_wgs84": [25.0, 37.0, 25.001, 37.001], "inside_mpa": True}])
+        far = {"lon": 25.0, "lat": 37.18}   # ~20 km north of the detection
+        ais = make_ais(self._tmp, [
+            {"mmsi": 111, **far, "timestamp": "2026-07-14T09:31:00Z", "sog": None, "cog": None},
+            {"mmsi": 111, **far, "timestamp": "2026-07-14T09:58:00Z", "sog": None, "cog": None},
+        ])
+        e = by_detection(run_fuse(run, ais))["det_00000"]
+        self.assertEqual(e["ais_status"], "dark")
+
     def test_known_dark_must_flag(self):
         # No AIS ping anywhere near -> DARK.
         run = make_run(self._tmp, [{"confidence": 0.8, "centroid_wgs84": [25.1, 37.1],

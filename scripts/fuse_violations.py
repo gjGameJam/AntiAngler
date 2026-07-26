@@ -259,19 +259,27 @@ def haversine_m(lon1, lat1, lon2, lat2):
 def match_detection(det, pings, scene_dt, dt_window_s, slack_m, max_speed_kn):
     """Velocity-aware association of one detection to the AIS pings.
 
-    For each ping within +/- dt_window_s of the acquisition, the vessel could have travelled
-    reach = speed * |t_scene - t_ping| + slack from where it pinged (use the ping's own sog;
-    fall back to max_speed_kn when sog is missing or zero). It matches iff the great-circle
-    distance is <= reach. Returns the best match (smallest distance-minus-reach margin, i.e.
-    the most comfortably-inside-envelope ping) or None. A vessel stationary at the acquisition
-    instant (dt=0) collapses reach to just the slack - correct, it must be right there.
+    Per VESSEL, only the ping nearest in time to the acquisition (within +/- dt_window_s) is
+    admissible - a fresher ping supersedes stale ones. (First real fusion, Anacapa 2026-07-26:
+    a moored vessel's 29-min-old ping otherwise built an envelope that "matched" detections
+    21 km away while its 2-min-old ping proved it was still at the dock.) From that ping the
+    vessel could have travelled reach = speed * |t_scene - t_ping| + slack (the ping's own sog;
+    fall back to max_speed_kn when sog is missing or zero) and it matches iff the great-circle
+    distance is <= reach. Returns the best match across vessels (smallest distance-minus-reach
+    margin, i.e. most comfortably inside its envelope) or None. A vessel stationary at the
+    acquisition instant (dt=0) collapses reach to just the slack - correct, it must be right there.
     """
     lon, lat = det["centroid_wgs84"]
-    best = None
+    nearest = {}   # mmsi -> (dt_s, ping) with the smallest |dt|
     for ping in pings:
         dt_s = abs((scene_dt - ping["when"]).total_seconds())
         if dt_s > dt_window_s:
             continue
+        cur = nearest.get(ping["mmsi"])
+        if cur is None or dt_s < cur[0]:
+            nearest[ping["mmsi"]] = (dt_s, ping)
+    best = None
+    for dt_s, ping in nearest.values():
         speed_kn = ping["sog"] if (ping["sog"] and ping["sog"] > 0) else max_speed_kn
         reach = speed_kn * KNOTS_TO_M_S * dt_s + slack_m
         dist = haversine_m(lon, lat, ping["lon"], ping["lat"])

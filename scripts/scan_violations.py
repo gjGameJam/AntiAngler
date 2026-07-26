@@ -133,12 +133,17 @@ def run_pipeline(args):
     if args.gfw and not args.vessels:
         vessels_out = run / "gfw_vessels.json"
         print("[scan] gfw_vessels (--from-events) ...")
-        stage_gfw_vessels(events_json, vessels_out, args.gfw_start, args.gfw_end, args.wdpa_id)
-        summary["stages"].append("gfw_vessels")
-        summary["outputs"]["gfw_vessels"] = str(vessels_out)
-        print("[scan] fuse_violations (re-fuse --vessels) ...")
-        stage_fuse(run, args.ais, vessels_out, args.dt_minutes)
-        summary["stages"].append("refuse")
+        try:
+            stage_gfw_vessels(events_json, vessels_out, args.gfw_start, args.gfw_end, args.wdpa_id)
+        except RuntimeError as exc:
+            # An all-dark run has no matched MMSIs to resolve - skip the enrich, keep reporting.
+            print(f"[scan] gfw_vessels skipped: {exc}")
+        else:
+            summary["stages"].append("gfw_vessels")
+            summary["outputs"]["gfw_vessels"] = str(vessels_out)
+            print("[scan] fuse_violations (re-fuse --vessels) ...")
+            stage_fuse(run, args.ais, vessels_out, args.dt_minutes)
+            summary["stages"].append("refuse")
 
     if not args.no_report:
         print("[scan] report_violations ...")

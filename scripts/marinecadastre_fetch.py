@@ -128,6 +128,13 @@ def normalize_row(row_lc):
         return None
     sog = _coerce_float(_get(row_lc, "sog", "speed"))
     cog = _coerce_float(_get(row_lc, "cog", "course"))
+    # AIS not-available sentinels (same as AISStream): SOG 102.3 kn / COG 360 deg mean "no
+    # value", not a speed. First real fusion (2026-07-26): a moored vessel's raw 102.3 built a
+    # bogus 92 km feasible envelope; null makes the matcher fall back to --max-speed-kn.
+    if sog is not None and sog >= 102.2:
+        sog = None
+    if cog is not None and cog >= 360.0:
+        cog = None
     rec = {"mmsi": str(mmsi), "lon": round(lon, 7), "lat": round(lat, 7), "timestamp": ts,
            "sog": None if sog is None else round(sog, 2),
            "cog": None if cog is None else round(cog, 2)}

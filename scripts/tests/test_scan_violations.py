@@ -91,6 +91,20 @@ class TestScanDriver(unittest.TestCase):
         self.assertEqual(summary["stages"], ["fuse"])
         self.assertFalse(list(self.run.glob("violations_report_*.csv")))
 
+    def test_gfw_skip_when_no_matched_mmsis(self):
+        # An all-dark run has no matched MMSIs, so gfw_vessels raises "No MMSIs"; the driver
+        # must log + skip the enrich (no refuse) and still produce the report, not crash.
+        def raising_gfw(events_json, out_path, start=None, end=None, wdpa_id=None):
+            raise RuntimeError("No MMSIs.")
+        orig = scan.stage_gfw_vessels
+        scan.stage_gfw_vessels = raising_gfw
+        try:
+            summary = scan.run_pipeline(_Args(run=self.run, ais=self.ais, gfw=True))
+        finally:
+            scan.stage_gfw_vessels = orig
+        self.assertEqual(summary["stages"], ["fuse", "report"])
+        self.assertTrue(list(self.run.glob("violations_report_*.csv")))
+
     def test_console_output_survives_legacy_codepage(self):
         # Windows consoles default to legacy code pages; the driver's summary print crashed on
         # U+2192 under cp1252. Drive main() through a strict cp1252 stdout to lock console-safety.
