@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "generated_utc": "2026-07-26T21:12:53Z",
+      "source_run": "2026-07-26T16-31-11Z_s1deep-singapore",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 18,
+      "positive_chips": 17,
+      "negative_chips": 1,
+      "total_boxes": 267
+    }
+  ]
+}
