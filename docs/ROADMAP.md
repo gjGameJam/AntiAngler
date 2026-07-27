@@ -255,12 +255,11 @@ phase sections above, `docs/PHASE3_PLAN.md`, `docs/IMPROVEMENT_PLAN.md`, and `do
 those for detail; this is the single index.
 
 ### 🏠 Do-from-home (need credentials / GPU — cannot run in the remote sandbox)
-- **Live-validate the AISStream + GFW calls + produce a first real violation.** Top priority — it
-  unblocks trust in the whole chain. `docs/PHASE3_PLAN.md` Workstream 1 (endpoint-verification checklist).
-- **Train the SAR detector `best_sar.pt`** (Phase 2 step 4). The reviewed SAR set
-  (`data/processed/sar_training_exports/deep/`) + the build/train flow exist; needs a GPU run + promote.
-- **Live runs** of `scan_violations.py` (batch driver) and the `marinecadastre_fetch.py --date` archive
-  download (the `--csv <local file>` path already runs offline).
+- ✅ **ALL CLOSED 2026-07-26** (single at-home session): AISStream + GFW live-verified, first real
+  violations produced (Anacapa 2 dark; SB-Channel 36 matched/7 dark), `scan_violations.py` +
+  `marinecadastre_fetch.py --date` run live, `best_sar.pt` trained + promoted (`sar-deep`), CUDA torch
+  installed. Full detail: `docs/PHASE3_PLAN.md` + `docs/STATUS.md`. Note: the follow-up SAR retrain
+  `sar-deep2` (+Singapore 267 boxes) was NOT promoted (Gibraltar gate regressed) — see STATUS.
 
 ### 🟢 Feasible offline (buildable in the sandbox; not yet built)
 - **Alerting interface** — the design proposal's final promised output. Today `report_violations.py`

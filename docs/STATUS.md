@@ -109,17 +109,22 @@ TRAIN carries ~1,300+ real reviewed boat boxes across big-ship + small-vessel do
 
 ## Recommended next steps
 
-**Phase 0 is complete; both generalization gates (cross-region, cross-type) are closed and the
-active-learning data loop is the proven engine.** In impact order:
+**Everything runnable is run (2026-07-26): Phase 3 live-validated end-to-end, 13-set label harvest
+reviewed + retrained + promoted, GPU unlocked.** In impact order:
 
-1. **Keep scaling the data loop — still highest leverage.** Remaining diversity gaps: **small
-   artisanal/pleasure boats**, **other regions/sea-states** (Atlantic, tropical, high-latitude), and a
-   **2nd small-vessel holdout**. For each fresh scene: hold it out, eval the live model on it first (the
-   honest number), then fold in and retrain. Watch the FP/chip trend; if it climbs, add same-region
-   reviewed empty-water hard negatives (O3).
-2. **Finish Phase 2 (SAR)** — run the full 30-epoch SAR train → promote `best_sar.pt` (the training set +
-   flow exist), then grow the thin deep-water set. **Or Phase 3 (AIS fusion)** — the operational payoff,
-   already built; live-validate it (`docs/PHASE3_PLAN.md`). See `docs/ROADMAP.md` for the full plan.
+1. **Attack the Kornati gap (cross-region small-vessel recall, R 0.51 / P 0.57).** Fetch + review 2–3
+   more Adriatic-class scenes (Croatian islands, Greek Ionian, Turkish coast — NOT Kornati itself, it
+   stays a pure holdout), fold in, retrain, re-gate on all 4 holdouts. Same loop as today, ~40 min of
+   review per cycle.
+2. **SAR needs regions, not one more scene:** `sar-deep2` (+Singapore) regressed the Gibraltar gate →
+   next attempt only after 2+ more reviewed deep-water regions or the xView3 transfer (`docs/ROADMAP.md`).
+   `best_sar.pt` = `sar-deep` unchanged; note it scores 0 on unseen regions (per-scene dB stretch), so
+   seed new SAR reviews with `sar_seed.py --water-only --min-depth 12`.
+3. **Operational mode:** run the live product loop — rolling `aisstream_fetch --wdpa-id` buffer over a
+   trafficked MPA + fresh S2 overpass → `scan_violations.py` (the 1C-live variant). Optional: Skylight
+   cross-check (3B, needs registration).
+4. **Pending user action:** merge the branch to main (`git -c http.sslBackend=schannel push origin
+   HEAD:main`) — all validation conditions met, CI green, classifier blocks the agent from pushing main.
 
 ---
 
