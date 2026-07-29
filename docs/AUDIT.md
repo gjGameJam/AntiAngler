@@ -44,17 +44,37 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
    `numpy==2.4.6` / `geopandas==1.1.4` pins (dry-run). A fresh clone can now run steps 1–2 from
    `pip install -r requirements.txt` alone.
 
-4. **No network retry/backoff anywhere** (STILL OPEN). `gfw_fetch.py` is a single `requests.post`;
-   `sat_fetch.py` does STAC search + N candidate SCL probes + COG reads with no retry; the P3 ingesters
-   (`gfw_vessels.py`, `aisstream_fetch.py`, `marinecadastre_fetch.py --date`) are single-shot too. One
-   transient 5xx/timeout fails the daily cron or a probe mid-run.
-   **Fix:** `requests.Session` + `urllib3.util.Retry` for GFW; add `GDAL_HTTP_MAX_RETRY=3` /
-   `GDAL_HTTP_RETRY_DELAY=2` to `sat_fetch._gdal_env` for the `/vsicurl` reads.
+4. **No network retry/backoff anywhere** — ✅ **DONE (2026-07-29).** The policy now lives in one place,
+   `scripts/_http.py`: `retry_policy()` (a pure dict-builder) + `build_session()` (a `requests.Session`
+   with `urllib3.util.Retry` mounted on http/https). Defaults: **3 attempts**, backoff factor 1.0
+   (waits 0s/2s/4s), retrying **429 + 500/502/503/504** and connect/read errors only.
+   - **Deliberate choices**, each locked by a test in `scripts/tests/test_http.py` (16):
+     **POST is retryable** (urllib3's default allow-list is idempotent-only, but every POST here —
+     `/v3/4wings/report`, `/v3/insights/vessels` — is query-shaped and creates nothing);
+     **4xx other than 429 are never retried** (notably 422, which GFW returns for a malformed
+     request — replaying it would just burn the backoff budget); and **`raise_on_status=False`**, so an
+     exhausted retry still returns the response and callers keep their existing `print(status)` +
+     `raise_for_status()` flow instead of surfacing a bare `RetryError`.
+   - **Wired into:** `gfw_fetch.py` (the daily cron POST, + `--retries`/`--retry-backoff` knobs with
+     `GFW_RETRIES`/`GFW_RETRY_BACKOFF` env fallbacks), `gfw_vessels.py` (all three v3 endpoints share one
+     session per batch, same knobs under `GFWV_*`), `marinecadastre_fetch.py` (the large `--date` zip;
+     note there is no range-resume — a retry restarts it), `bathymetry.py` (opentopodata throttles with
+     429 + `Retry-After`, which the policy honours), and `ingest_s2ships_finland.py` (~1000 chips × 3
+     bands; its application-level 403 SAS re-sign stays as the outer loop).
+   - **`/vsicurl` COG reads:** `providers/_raster.py` `gdal_env()` now sets `GDAL_HTTP_MAX_RETRY=3` /
+     `GDAL_HTTP_RETRY_DELAY=2` (both overridable per call), so a `sat_fetch` run — one STAC search + N
+     SCL probes + a band read — survives a transient failure.
+   - **Not covered:** `aisstream_fetch.py` is a **websocket**, where "retry" means reconnect-and-resume
+     mid-capture. That changes capture semantics (duplicate positions across a reconnect, partial
+     windows) and is a design decision, not a transport setting, so it was deliberately left alone
+     rather than half-done. Still open if the live-capture operational mode needs it.
+   - **Does NOT help** the Avast schannel partial-chain failure — that is a cert-store problem; use the
+     CA-bundle + `--insecure-tls` recipe in `docs/STATUS.md`.
 
 5. **CI runs no lint/compile/test** — ✅ **DONE (2026-07-23).** `.github/workflows/tests.yml` runs on
    every push + PR: `python -m compileall -q scripts` (syntax gate for the whole repo, including the
    heavy ML/geo scripts — compileall parses, doesn't import) + `python -m unittest discover -s
-   scripts/tests` (the 104-test offline suite). Pure stdlib, no credentials/deps — free coverage. A
+   scripts/tests` (the 129-test offline suite). Pure stdlib, no credentials/deps — free coverage. A
    syntax error in any script or a P3 regression now fails CI instead of shipping. (`ruff check` could
    be added later as an optional lint step.)
 
@@ -71,6 +91,12 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
    deliberately favors standalone one-script-per-stream files (no shared-import coupling). The "leave
    until a third copy" trigger has long passed; extraction is a **conscious deferral**, not an oversight
    — revisit only if the helper needs to change in more than one place at once.
+   **Precedent set 2026-07-29 (#4):** the retry policy *did* meet that trigger — one backoff policy has to
+   change everywhere at once — so it was extracted to `scripts/_http.py` rather than copy-pasted into six
+   scripts. That is the second underscore-prefixed shared **utility** (after `providers/_raster.py`), and
+   it does not weaken the house rule, which is about **data-stream** coupling: an ingester still never
+   imports another stream or the matcher. `env_or` stays duplicated — it is 3 lines and stable, so it has
+   not met the trigger.
 
 8. **Chosen scene is probed (SCL) then re-opened for the RGB read** in `sat_fetch` — different assets,
    so not truly redundant, but it re-signs and recomputes `transform_bounds`. Negligible; not worth
@@ -89,7 +115,9 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 ---
 
 ### Suggested order of attack
-Reproducibility wins #3 (`requirements.txt`), #5 (CI test job), and #6 (`.env.example`) are **done**, as
-are #1 (all four scripts now have `main()` guards) and #2 (`prep_polygons` hardening), both closed
-2026-07-25. **The one open reliability item is #4 (network retry/backoff).** #7–#11 are conscious
-house-style trade-offs; leave. These are also indexed under `docs/ROADMAP.md` → "Remaining TODO items".
+**All P1/P2 findings are now closed.** Reproducibility wins #3 (`requirements.txt`), #5 (CI test job) and
+#6 (`.env.example`) closed 2026-07-23; #1 (`main()` guards on all four scripts) and #2 (`prep_polygons`
+hardening) closed 2026-07-25; **#4 (network retry/backoff) closed 2026-07-29** via `scripts/_http.py` +
+the GDAL `/vsicurl` retry config, with the websocket (`aisstream_fetch.py`) reconnect case explicitly
+left open as a semantics decision rather than a transport setting. #7–#11 remain conscious house-style
+trade-offs; leave. These are also indexed under `docs/ROADMAP.md` → "Remaining TODO items".

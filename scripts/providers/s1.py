@@ -52,6 +52,7 @@ class Sentinel1GrdProvider(Provider):
     default_bands = "vv,vh"                 # polarizations, not RGB bands; IW coastal = vv,vh (EW open-ocean = hh,hv)
     default_resolution = 10.0
     default_stretch_max = 0.0              # unused: SAR uses a dB *percentile* stretch (see scale_to_uint8)
+    output_subdir = "sentinel1"            # SAR runs get their OWN root, never the optical sentinel2/
     known_limitations = (
         "Sentinel-1 SAR ~10-20 m: detects vessels as bright backscatter, so it needs a SAR-trained "
         "model (best_sar.pt), not the optical best.pt.",

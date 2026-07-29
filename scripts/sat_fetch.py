@@ -42,7 +42,8 @@ from providers._raster import decimated_read as _decimated_read, gdal_env as _gd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-OUTPUT_DIR = REPO_ROOT / "data" / "raw" / "sentinel2"
+RAW_DIR = REPO_ROOT / "data" / "raw"
+OUTPUT_DIR = RAW_DIR / "sentinel2"   # optical default; kept as a module constant for importers
 DEFAULT_GPKG = REPO_ROOT / "data" / "processed" / "wdpa_marine_ia_ib.gpkg"
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 
@@ -145,7 +146,10 @@ def parse_args(argv=None):
                    help="Reject an AOI whose lon or lat span exceeds this (guards against OOM).")
     # --- Output ---
     p.add_argument("--label", default=env_or("SAT_LABEL", None), help="Slug for the run directory name.")
-    p.add_argument("--output-dir", type=Path, default=Path(env_or("SAT_OUTPUT_DIR", str(OUTPUT_DIR))))
+    p.add_argument("--output-dir", type=Path,
+                   default=(lambda v: Path(v) if v else None)(env_or("SAT_OUTPUT_DIR", None)),
+                   help="Run root. Default: data/raw/<provider subdir> — sentinel2/ for --provider pc, "
+                        "sentinel1/ for --provider s1, so the optical and SAR streams never share a dir.")
     p.add_argument("--pc-subscription-key", default=env_or("PC_SDK_SUBSCRIPTION_KEY", None),
                    help="Optional Planetary Computer key for higher rate limits.")
     p.add_argument("--insecure-tls", action="store_true", default=truthy(env_or("SAT_INSECURE_TLS", "")),
@@ -295,6 +299,19 @@ def write_manifest(path, manifest):
     tmp.replace(path)
 
 
+def default_output_dir(provider):
+    """Run root for this provider: ``data/raw/<provider.output_subdir>``.
+
+    One root per MODALITY so SAR runs stop landing in the optical ``sentinel2/`` dir. That
+    separation is the upstream half of the rule that keeps SAR chips out of the optical
+    training set (``export_labels.py`` writes SAR to ``sar_training_exports/`` because
+    ``build_dataset.py`` sweeps every tag in ``training_exports/`` into ``data/training/``).
+
+    Purely additive: existing run dirs are untouched (every downstream stage takes an explicit
+    ``--run <path>``), and ``--output-dir`` / ``SAT_OUTPUT_DIR`` still override."""
+    return RAW_DIR / (provider.output_subdir or "sentinel2")
+
+
 def main(argv=None):
     """CLI entry point: pick a Provider, resolve the AOI, select a scene, tile it into chips.
 
@@ -316,6 +333,8 @@ def main(argv=None):
         args.resolution = provider.default_resolution
     if args.stretch_max is None:
         args.stretch_max = provider.default_stretch_max
+    if args.output_dir is None:
+        args.output_dir = default_output_dir(provider)
 
     bbox, label, wdpa_meta = resolve_bbox(args)
     validate_bbox(bbox, args.max_bbox_deg)
@@ -330,6 +349,7 @@ def main(argv=None):
     print(f"  select: scene-cloud<{args.max_cloud}% search={args.max_search} "
           f"min-cover={args.min_coverage:.0%} max-aoi-cloud={args.max_aoi_cloud:.0%}")
     print(f"  bands={args.bands}  resolution={args.resolution}m  tile={args.tile_size}/{args.overlap}")
+    print(f"  output_root={args.output_dir}")
 
     if args.insecure_tls:
         print("WARNING: --insecure-tls set - GDAL will NOT verify TLS certs on COG reads (GDAL_HTTP_UNSAFESSL=YES).")

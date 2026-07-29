@@ -13,6 +13,8 @@ except ImportError:  # pragma: no cover - dotenv is optional at import time
     def load_dotenv(*_args, **_kwargs):
         return False
 
+import _http  # stdlib-only at import time; lazy-imports requests inside build_session
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 OUTPUT_DIR = REPO_ROOT / "data" / "raw" / "gfw"
@@ -53,6 +55,11 @@ def parse_args(argv=None):
                    default=env_or("GFW_DATASET", "public-global-fishing-effort:latest"))
     p.add_argument("--timeout", type=float, default=float(env_or("GFW_TIMEOUT", 120)),
                    help="HTTP timeout in seconds (default 120).")
+    p.add_argument("--retries", type=int, default=int(env_or("GFW_RETRIES", _http.DEFAULT_TOTAL)),
+                   help="Retry attempts on 429/5xx and connect/read errors (default 3; 0 disables).")
+    p.add_argument("--retry-backoff", type=float,
+                   default=float(env_or("GFW_RETRY_BACKOFF", _http.DEFAULT_BACKOFF_FACTOR)),
+                   help="Exponential backoff factor between retries (default 1.0 -> 0s, 2s, 4s).")
     return p.parse_args(argv)
 
 
@@ -128,8 +135,6 @@ def write_json_atomic(path, data):
 
 
 def main(argv=None):
-    import requests  # lazy: keeps `import gfw_fetch` free of the network dep
-
     load_env()
     args = parse_args(argv)
     start, end = resolve_date_range(args)
@@ -149,22 +154,33 @@ def main(argv=None):
         "Accept": "application/json",
     }
 
+    policy = _http.retry_policy(total=args.retries, backoff_factor=args.retry_backoff)
+
     print("REQUEST:")
     print(f"  region={args.region_dataset}/{args.region_id}")
     print(f"  date-range={start},{end}")
     print(f"  gear={args.gear}")
     print(f"  dataset={args.dataset}")
+    print(f"  {_http.describe(policy)}")
 
-    response = requests.post(
-        GFW_REPORT_URL, headers=headers, params=params, json=payload, timeout=args.timeout
-    )
+    # Retry/backoff (AUDIT #4): the daily cron is a single POST, so one transient 5xx or
+    # timeout used to fail the whole run. The policy sets raise_on_status=False, so an
+    # exhausted retry still returns the response and the STATUS print + raise_for_status()
+    # below report it exactly as before.
+    session = _http.build_session(policy)
+    try:
+        response = session.post(
+            GFW_REPORT_URL, headers=headers, params=params, json=payload, timeout=args.timeout
+        )
 
-    print(f"\nFINAL URL: {response.request.url}")
-    print(f"STATUS:    {response.status_code}")
+        print(f"\nFINAL URL: {response.request.url}")
+        print(f"STATUS:    {response.status_code}")
 
-    # Raise before writing anything, so a non-2xx never leaves a file behind.
-    response.raise_for_status()
-    data = response.json()
+        # Raise before writing anything, so a non-2xx never leaves a file behind.
+        response.raise_for_status()
+        data = response.json()
+    finally:
+        session.close()
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     out_path = write_json_atomic(OUTPUT_DIR / f"gfw_report_{timestamp}.json", data)

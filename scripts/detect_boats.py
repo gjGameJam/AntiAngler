@@ -105,8 +105,9 @@ def load_manifest(run_dir):
 
 def load_model(weights, class_name):
     if not Path(weights).exists():
-        raise RuntimeError(f"Weights not found: {weights}. Point --weights at your YOLOv8 .pt "
-                           "(see C:\\gtest\\BoatDetection).")
+        raise RuntimeError(f"Weights not found: {weights}. Point --weights at a YOLOv8 .pt — "
+                           "the promoted models live in data/training/weights/ (best.pt optical, "
+                           "best_sar.pt for Sentinel-1 runs); train one with scripts/train.py.")
     from ultralytics import YOLO  # heavy dep (pulls torch); imported lazily
     return YOLO(str(weights))
 

@@ -10,6 +10,8 @@ except ImportError:                  # keep the module importable (and offline-t
     def load_dotenv(*_args, **_kwargs):
         return False
 
+import _http  # stdlib-only at import time; lazy-imports requests inside build_session
+
 # The objective of this script (GFW per-vessel ingestion, ROADMAP Phase 3 step 3):
 # - Take a set of MMSIs (explicit --mmsi, or pulled from a fuse_violations violation_events.json
 #   via --from-events, or an AIS positions file via --from-ais)
@@ -100,6 +102,11 @@ def parse_args(argv=None):
                    help="Max identity search results to consider per MMSI. Default 5.")
     p.add_argument("--out", type=Path, default=env_or("GFWV_OUT", None),
                    help="Output path. Default data/raw/gfw_vessels/gfw_vessels_<UTC>.json.")
+    p.add_argument("--retries", type=int, default=int(env_or("GFWV_RETRIES", _http.DEFAULT_TOTAL)),
+                   help="Retry attempts on 429/5xx and connect/read errors (default 3; 0 disables).")
+    p.add_argument("--retry-backoff", type=float,
+                   default=float(env_or("GFWV_RETRY_BACKOFF", _http.DEFAULT_BACKOFF_FACTOR)),
+                   help="Exponential backoff factor between retries (default 1.0 -> 0s, 2s, 4s).")
     p.add_argument("--dry-run", action="store_true",
                    help="Resolve MMSIs + print the planned requests, but do NOT call GFW or write. "
                         "Needs neither a token nor the network.")
@@ -484,58 +491,52 @@ def resolve_window(start, end):
     return (end_date - timedelta(days=7)).isoformat(), end_d
 
 
-def _requests():
-    try:
-        import requests   # pinned in requirements.txt
-        return requests
-    except ImportError as exc:
-        raise RuntimeError("requests is not installed (pip install -r requirements.txt)") from exc
-
-
 def _headers(token):
     return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
 
-def search_vessel(token, mmsi, dataset, limit):
+# The three shells below take an explicit `session` (scripts/_http.build_session) so a batch of
+# MMSIs shares one connection pool and one retry policy (AUDIT #4). Retries are per-request, and
+# resolve_one/main already isolate a failing MMSI, so an exhausted retry degrades one vessel
+# record rather than aborting the run.
+
+def search_vessel(session, token, mmsi, dataset, limit):
     """GET /v3/vessels/search?query=<mmsi> - identity resolution. Thin shell; parsing is
     normalize_identity(). Endpoint + params verified against the live v3 API 2026-07-26."""
-    requests = _requests()
     params = {"query": str(mmsi), "datasets[0]": dataset, "limit": limit}
-    r = requests.get(f"{GFW_BASE}/v3/vessels/search", headers=_headers(token), params=params, timeout=120)
+    r = session.get(f"{GFW_BASE}/v3/vessels/search", headers=_headers(token), params=params, timeout=120)
     r.raise_for_status()
     return r.json()
 
 
-def fishing_events(token, vessel_id, dataset, start, end):
+def fishing_events(session, token, vessel_id, dataset, start, end):
     """GET /v3/events (fishing) for one vesselId in [start,end]. Parsing is summarize_fishing().
     Verified live 2026-07-26: the API 422s if `limit` is sent without `offset`."""
-    requests = _requests()
     params = {"datasets[0]": dataset, "vessels[0]": vessel_id,
               "start-date": start, "end-date": end, "limit": 500, "offset": 0}
-    r = requests.get(f"{GFW_BASE}/v3/events", headers=_headers(token), params=params, timeout=120)
+    r = session.get(f"{GFW_BASE}/v3/events", headers=_headers(token), params=params, timeout=120)
     r.raise_for_status()
     return r.json()
 
 
-def vessel_insights(token, vessel_id, dataset_identity, start, end):
+def vessel_insights(session, token, vessel_id, dataset_identity, start, end):
     """POST /v3/insights/vessels for one vesselId. Parsing is normalize_insights().
     Verified live 2026-07-26: allowed includes are [FISHING, GAP, COVERAGE,
     VESSEL-IDENTITY-FLAG-CHANGES, VESSEL-IDENTITY-IUU-VESSEL-LIST, VESSEL-IDENTITY-MOU-LIST]
     (the old VESSEL-IDENTITY-IUU 422s); success is a 201 with one flat object."""
-    requests = _requests()
     body = {"includes": ["FISHING", "GAP", "VESSEL-IDENTITY-IUU-VESSEL-LIST"],
             "startDate": start, "endDate": end,
             "vessels": [{"vesselId": vessel_id, "datasetId": dataset_identity}]}
-    r = requests.post(f"{GFW_BASE}/v3/insights/vessels", headers=_headers(token), json=body, timeout=120)
+    r = session.post(f"{GFW_BASE}/v3/insights/vessels", headers=_headers(token), json=body, timeout=120)
     r.raise_for_status()
     return r.json()
 
 
-def resolve_one(token, mmsi, args, start, end, region_bbox=None):
+def resolve_one(session, token, mmsi, args, start, end, region_bbox=None):
     """Full per-MMSI resolution: identity -> fishing -> (optional) insights -> merged record.
     Any single sub-call failing is caught and logged so one bad MMSI doesn't abort the batch.
     region_bbox (optional) filters fishing events to the MPA so fishing_probability is MPA-specific."""
-    identity = normalize_identity(search_vessel(token, mmsi, args.dataset_identity, args.limit), mmsi)
+    identity = normalize_identity(search_vessel(session, token, mmsi, args.dataset_identity, args.limit), mmsi)
     vessel_id = identity.get("vessel_id")
     fishing = {"fishing_hours": None, "fishing_event_count": None,
                "fishing_probability": None, "region_filtered": False}
@@ -543,13 +544,14 @@ def resolve_one(token, mmsi, args, start, end, region_bbox=None):
     if vessel_id:
         try:
             fishing = summarize_fishing(
-                fishing_events(token, vessel_id, args.dataset_events, start, end), region_bbox)
+                fishing_events(session, token, vessel_id, args.dataset_events, start, end), region_bbox)
         except Exception as exc:   # noqa: BLE001 - one vessel's failure must not kill the run
             print(f"  MMSI {mmsi}: fishing lookup failed: {exc}")
         if args.insights:
             try:
                 insights = normalize_insights(
-                    vessel_insights(token, vessel_id, args.dataset_identity, start, end), mmsi, vessel_id)
+                    vessel_insights(session, token, vessel_id, args.dataset_identity, start, end),
+                    mmsi, vessel_id)
             except Exception as exc:   # noqa: BLE001
                 print(f"  MMSI {mmsi}: insights lookup failed: {exc}")
     return build_vessel_record(identity, fishing, insights)
@@ -564,9 +566,12 @@ def main(argv=None):
     start, end = resolve_window(args.start, args.end)
     region_bbox, region_label = resolve_region_bbox(args)
 
+    policy = _http.retry_policy(total=args.retries, backoff_factor=args.retry_backoff)
+
     print("GFW VESSELS:")
     print(f"  mmsis={len(mmsis)}  window={start}..{end}  insights={args.insights}")
     print(f"  identity_dataset={args.dataset_identity}  events_dataset={args.dataset_events}")
+    print(f"  {_http.describe(policy)}")
     if region_bbox is not None:
         print(f"  region={region_label} bbox={tuple(round(v, 5) for v in region_bbox)} "
               f"(fishing_probability filtered to the MPA)")
@@ -589,19 +594,24 @@ def main(argv=None):
                            "Use --dry-run to inspect the plan without a token.")
     token = token.strip()
 
+    # One retrying session for the whole batch: shared connection pool + one retry policy.
+    session = _http.build_session(policy)
     records = []
-    for mmsi in mmsis:
-        try:
-            rec = resolve_one(token, mmsi, args, start, end, region_bbox)
-        except Exception as exc:   # noqa: BLE001 - identity failure for one MMSI: log + emit a stub
-            print(f"  MMSI {mmsi}: identity lookup failed: {exc}")
-            rec = build_vessel_record({"mmsi": str(mmsi), "vessel_id": None, "shipname": None,
-                                       "flag": None, "geartype": None, "imo": None, "callsign": None},
-                                      {"fishing_hours": None, "fishing_event_count": None,
-                                       "fishing_probability": None, "region_filtered": False}, None)
-        records.append(rec)
-        print(f"  {mmsi}: name={rec.get('shipname')} flag={rec.get('flag')} "
-              f"gear={rec.get('geartype')} fishing_h={rec.get('fishing_hours')}")
+    try:
+        for mmsi in mmsis:
+            try:
+                rec = resolve_one(session, token, mmsi, args, start, end, region_bbox)
+            except Exception as exc:   # noqa: BLE001 - identity failure for one MMSI: log + emit a stub
+                print(f"  MMSI {mmsi}: identity lookup failed: {exc}")
+                rec = build_vessel_record({"mmsi": str(mmsi), "vessel_id": None, "shipname": None,
+                                           "flag": None, "geartype": None, "imo": None, "callsign": None},
+                                          {"fishing_hours": None, "fishing_event_count": None,
+                                           "fishing_probability": None, "region_filtered": False}, None)
+            records.append(rec)
+            print(f"  {mmsi}: name={rec.get('shipname')} flag={rec.get('flag')} "
+                  f"gear={rec.get('geartype')} fishing_h={rec.get('fishing_hours')}")
+    finally:
+        session.close()
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     out_path = Path(args.out) if args.out else OUTPUT_DIR / f"gfw_vessels_{ts}.json"

@@ -16,13 +16,13 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-import requests
 import geopandas as gpd
 from pyogrio import list_layers
 from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
+import _http  # noqa: E402 - needs the sys.path insert above
 from providers.pc import PlanetaryComputerS2Provider
 
 CA = os.environ.get("REQUESTS_CA_BUNDLE") or True  # OpenSSL path works under Avast; GDAL /vsicurl does not
@@ -59,10 +59,25 @@ def resolve_item(cat, tile, date):
     return items[0]
 
 
+_SESSION = None
+
+
+def _session():
+    """One retrying session for the whole ingest (AUDIT #4). This script pulls three bands per
+    product over ~1000 chips, so a single transient 5xx/timeout used to abort a long run."""
+    global _SESSION
+    if _SESSION is None:
+        _SESSION = _http.build_session(verify=CA)
+    return _SESSION
+
+
 def fetch_band(cat, item, tile, date, k):
-    """Download one band via requests; on a 403 (SAS token expired on a long run) re-sign once."""
+    """Download one band; on a 403 (SAS token expired on a long run) re-sign once.
+
+    The 403 re-sign is application-level and stays here — the transport retry underneath only
+    covers 429/5xx/connect/read, and re-issuing an expired-SAS URL would just 403 again."""
     for attempt in range(2):
-        resp = requests.get(item.assets[k].href, verify=CA, timeout=300)
+        resp = _session().get(item.assets[k].href, timeout=300)
         if resp.status_code == 403 and attempt == 0:
             item = resolve_item(cat, tile, date)  # fresh SAS-signed href
             continue

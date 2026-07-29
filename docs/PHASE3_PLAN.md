@@ -16,15 +16,16 @@ precision*, which the fusion improves.
 | Stage | Script | Output | Tests |
 |---|---|---|---|
 | AIS ingest | `aisstream_fetch.py` | `data/raw/ais/ais_positions_*.json` | `test_aisstream_fetch.py` (20) |
-| Fusion (matcher) | `fuse_violations.py` | `violation_events.json` + dark `.geojson` | `test_fuse_violations.py` (22) |
-| GFW identity/fishing | `gfw_vessels.py` (+ `--region` MPA filter, 3A) | `data/raw/gfw_vessels/*.json` | `test_gfw_vessels.py` (23) |
-| Enrichment join | `fuse_violations.py --vessels` | enriched `violation_events.json` | (in the 22 above) |
-| Operator output (2B) | `report_violations.py` | ranked CSV + self-contained HTML | `test_report_violations.py` (9) |
-| Batch driver (2A) | `scan_violations.py` | sequences the stages | `test_scan_violations.py` (5) |
-| Historical AIS (3C) | `marinecadastre_fetch.py` | archive CSV → AIS contract | `test_marinecadastre_fetch.py` (7) |
+| Fusion (matcher) | `fuse_violations.py` | `violation_events.json` + dark `.geojson` | `test_fuse_violations.py` (24) |
+| GFW identity/fishing | `gfw_vessels.py` (+ `--region` MPA filter, 3A) | `data/raw/gfw_vessels/*.json` | `test_gfw_vessels.py` (25) |
+| Enrichment join | `fuse_violations.py --vessels` | enriched `violation_events.json` | (in the 24 above) |
+| Operator output (2B) | `report_violations.py` | ranked CSV + self-contained HTML | `test_report_violations.py` (10) |
+| Batch driver (2A) | `scan_violations.py` | sequences the stages | `test_scan_violations.py` (7) |
+| Historical AIS (3C) | `marinecadastre_fetch.py` | archive CSV → AIS contract | `test_marinecadastre_fetch.py` (9) |
 | Contract guard (4A) | `scripts/tests/fixtures/` | — | `test_pipeline_e2e.py` (3) |
 
-**104 offline tests**, no network / key / ML deps. The `violation_events.json` schema is pinned in
+**98 offline P3 tests** (129 across the whole suite, which also covers `gfw_fetch.py` and the shared
+`_http.py` retry policy), no network / key / ML deps. The `violation_events.json` schema is pinned in
 `docs/PIPELINE.md` (4B). The full chain:
 `sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels → report_violations`
 (or one `scan_violations.py` invocation).

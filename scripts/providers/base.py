@@ -41,6 +41,12 @@ class Provider(abc.ABC):
     default_resolution = 10.0
     default_stretch_max = 3000.0
 
+    #: run-root subdir under ``data/raw/`` — one per MODALITY, so optical and SAR runs never
+    #: share a directory (a SAR chip must never reach the optical training set; see
+    #: ``docs/IMPROVEMENT_PLAN.md`` cross-cutting). ``--output-dir``/``SAT_OUTPUT_DIR``
+    #: still override it. Providers reading the same sensor share one value.
+    output_subdir = "sentinel2"
+
     #: written verbatim into ``manifest["known_limitations"]``
     known_limitations = ()
 

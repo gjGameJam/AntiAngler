@@ -20,7 +20,8 @@ from dotenv import load_dotenv
 #
 # Only chips the reviewer marked reviewed are exported: YOLO needs COMPLETE labels (every boat
 # in a training image boxed), and the reviewed flag is that guarantee. Feed the output dir to
-# BoatDetection/scripts/helpers/splitData.py, then fine-tune from best.pt. See docs/PIPELINE.md.
+# build_dataset.py (which layers it onto data/training/), then fine-tune with
+# train.py --weights best. See docs/PIPELINE.md.
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent

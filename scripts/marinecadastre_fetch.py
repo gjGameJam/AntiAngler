@@ -5,6 +5,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import _http  # stdlib-only at import time; lazy-imports requests inside build_session
+
 # The objective of this script (historical AIS ingestion, PHASE3_PLAN Workstream 3C):
 # - Normalize a NOAA MarineCadastre archive AIS CSV into the project's neutral AIS contract
 #   ({mmsi, lon, lat, timestamp, sog?, cog?}) that fuse_violations.py --ais reads
@@ -213,20 +215,26 @@ def iter_csv_rows(csv_paths):
 
 
 def download_day(date_str):
-    """Do-from-home: download + unzip a MarineCadastre daily archive to a temp CSV. Thin shell."""
+    """Do-from-home: download + unzip a MarineCadastre daily archive to a temp CSV. Thin shell.
+
+    The daily national zips are large, so a transient 5xx/timeout mid-download used to lose the
+    whole transfer; the retrying session (AUDIT #4) re-issues it. Note there is no range-resume —
+    a retry restarts the download from zero."""
     import io
     import tempfile
     import zipfile
-    try:
-        import requests
-    except ImportError as exc:
-        raise RuntimeError("requests needed for --date download (pip install -r requirements.txt)") from exc
     y, m, d = (int(x) for x in date_str.split("-"))
     url = MC_URL_TMPL.format(year=y, month=m, day=d)
-    print(f"  downloading {url} …")
-    resp = requests.get(url, timeout=600)
-    resp.raise_for_status()
-    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    policy = _http.retry_policy()
+    print(f"  downloading {url} …  ({_http.describe(policy)})")
+    session = _http.build_session(policy)
+    try:
+        resp = session.get(url, timeout=600)
+        resp.raise_for_status()
+        content = resp.content
+    finally:
+        session.close()
+    zf = zipfile.ZipFile(io.BytesIO(content))
     names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
     if not names:
         raise RuntimeError(f"No CSV inside {url}")

@@ -29,6 +29,7 @@ class PlanetaryComputerS2Provider(Provider):
     default_bands = "B04,B03,B02"
     default_resolution = 10.0
     default_stretch_max = 3000.0
+    output_subdir = "sentinel2"
     known_limitations = ("Sentinel-2 10 m GSD is marginal for vessels smaller than ~15 m.",)
 
     def open_catalog(self, stac_url, sub_key):

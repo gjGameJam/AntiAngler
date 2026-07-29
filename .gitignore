@@ -220,8 +220,12 @@ data/raw/ais/
 # Normalized GFW per-vessel identity/activity records written by scripts/gfw_vessels.py
 data/raw/gfw_vessels/
 
-# Sentinel-2 imagery chip runs written by scripts/sat_fetch.py
+# Sentinel-2 optical imagery chip runs written by scripts/sat_fetch.py (--provider pc)
 data/raw/sentinel2/
+
+# Sentinel-1 SAR imagery chip runs written by scripts/sat_fetch.py (--provider s1).
+# Separate root per modality so SAR chips never mix into the optical stream.
+data/raw/sentinel1/
 
 # Human-labeled training exports produced by scripts/export_labels.py (planned)
 data/processed/training_exports/
