@@ -1,8 +1,14 @@
 # PHASE 3 COMPLETION PLAN — AIS dark-vessel product
 
-_Snapshot: 2026-07-23. The plan for finishing Phase 3 (the AIS dark-vessel reframe). Read
-`docs/ROADMAP.md` Phase 3 for the strategic framing and `CLAUDE.md` for the per-script contracts;
-this file is the actionable "what's left" list. Update the checkboxes as items land._
+_Snapshot: **2026-08-01**. The plan for finishing Phase 3 (the AIS dark-vessel reframe). Read
+`docs/ROADMAP.md` Phase 3 for the strategic framing and `CLAUDE.md` for the per-script contracts._
+
+> ## ✅ PHASE 3 IS COMPLETE — every box in "Definition of done" is ticked
+> Built + offline-tested 2026-07-23, **live-validated 2026-07-26** (AISStream, GFW v3, and a first
+> real violation over Anacapa Island SMR), extended 2026-07-29 with three more offline stages.
+> **This file is now mostly a record.** The only things still open are the *optional* Skylight
+> cross-check (3B) and the near-real-time operational mode — both tracked as **W9** and **W3** in
+> `docs/ROADMAP.md` → THE WORK QUEUE, which is where forward-looking work now lives.
 
 ## The product in one line
 
@@ -23,16 +29,29 @@ precision*, which the fusion improves.
 | Batch driver (2A) | `scan_violations.py` | sequences the stages | `test_scan_violations.py` (7) |
 | Historical AIS (3C) | `marinecadastre_fetch.py` | archive CSV → AIS contract | `test_marinecadastre_fetch.py` (9) |
 | Contract guard (4A) | `scripts/tests/fixtures/` | — | `test_pipeline_e2e.py` (3) |
+| **Local fishing signal** (2026-07-29) | `ais_fishing.py` | vessel records, `source: ais-heuristic` | `test_ais_fishing.py` (19) |
+| **AIS × MPA geofencing** (2026-07-29) | `geofence_ais.py` | `"reported"` events + `.geojson` | `test_geofence_ais.py` (26) |
+| **Alerting interface** (2026-07-29) | `alert_violations.py` | severity digest (console / markdown) | `test_alert_violations.py` (29) |
 
-**98 offline P3 tests** (129 across the whole suite, which also covers `gfw_fetch.py` and the shared
+**203 offline tests** across the whole suite (which also covers `gfw_fetch.py` and the shared
 `_http.py` retry policy), no network / key / ML deps. The `violation_events.json` schema is pinned in
 `docs/PIPELINE.md` (4B). The full chain:
 `sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels → report_violations`
 (or one `scan_violations.py` invocation).
 
-**The gap:** every stage above is validated only against *synthetic* fixtures. Nothing has run against
-the live AISStream / GFW services, and the loop has never produced a violation from real imagery. That
-is what "finish Phase 3" means, and it drives the ordering below.
+**The three 2026-07-29 additions changed what the product can do without credentials.** `ais_fishing.py`
+supplies the fishing term from AIS *movement* instead of the GFW API, and `geofence_ais.py` needs no
+imagery at all — so **an AIS capture alone now produces a scored, alerting product loop** with no GFW
+token, no overpass timing, and no GPU. That is the cheapest live demo available (ROADMAP **W3**, path A).
+
+**Three statuses now exist**, and `report_violations.py` / `alert_violations.py` rank all three together
+with no special-casing:
+
+| Status | Meaning | Producer | Scored |
+|---|---|---|---|
+| `dark` | detected, **not** transmitting | `fuse_violations.py` | `presence_confidence` — the product signal |
+| `matched` | detected **and** transmitting | `fuse_violations.py` | `presence × w`, `matched_weight` (0.25) → `fishing_weight` |
+| `reported` | transmitting from inside the MPA, never detected | `geofence_ais.py` | transit floor (0.10) → `fishing_weight`; IUU escalates |
 
 ---
 
@@ -215,14 +234,27 @@ is what "finish Phase 3" means, and it drives the ordering below.
 - [x] `fishing_probability` is MPA-specific (3A — `--region-bbox`/`--wdpa-id`; live GFW call still 🏠).
 - [x] A batch driver runs the loop for a `--wdpa-id` (2A — `scan_violations.py`; live run still 🏠).
 - [x] An operator-facing ranked output exists (2B — `report_violations.py`).
-- [x] Historical AIS (3C — `marinecadastre_fetch.py`).  Optional remaining: Skylight cross-check (3B).
+- [x] Historical AIS (3C — `marinecadastre_fetch.py`).
+- [x] **An alerting interface** (`alert_violations.py`, 2026-07-29) — the last capability the design
+      proposal promised. Severity-bucketed, MPA-grouped, `--exit-code` cron gate.
+- [x] **The fishing signal works with no credentials** (`ais_fishing.py`, 2026-07-29).
+- [x] **Cooperative in-MPA vessels are flagged too** (`geofence_ais.py`, 2026-07-29) — the third status.
 
-## Recommended sequence
+**Optional / not required for done:** Skylight cross-check (3B → ROADMAP **W9**, gated on API access).
 
-1. 🏠 **1A → 1B** (live validation, do from home) — unblocks trust; do `3A` while in `gfw_vessels.py` for 1B.
-2. 🏠 **1C** (real end-to-end run, do from home) — first real violation.
-3. **2A → 2B** (batch driver + ranked output) — the product surface; **buildable here now**, only 2A's live run waits on step 1.
-4. **Optional:** `3B` Skylight, `3C` historical AIS (both do-from-home / access-gated), `4A/4B/4C` closeout (buildable here).
+## What's left (moved to `docs/ROADMAP.md` → THE WORK QUEUE)
 
-Steps 1–3 need only free accounts (AISStream key, GFW token) already in scope for the project; no paid
-services and no new heavy dependencies.
+Phase 3's build is finished, so the remaining items are tracked with the rest of the project's work
+rather than here:
+
+- **W3 — the near-real-time operational mode.** Everything has run *historically* (MarineCadastre
+  archive AIS fused against a past overpass). What has never run is a rolling live AIS buffer fused
+  against a fresh overpass. Path A (AIS-only, needs just `AISSTREAM_API_KEY`) is the cheap version.
+- **W8 — websocket reconnect for `aisstream_fetch.py`.** Deliberately left open in the AUDIT #4 retry
+  round: reconnect-and-resume changes *capture semantics* (duplicate positions, partial windows), which
+  is a design decision, not a transport setting. **W3 depends on deciding this** — a rolling buffer is
+  exactly where a dropped connection costs you the acquisition.
+- **W9 — Skylight cross-check** (3B below), gated on external API access.
+
+Everything above needed only free accounts (AISStream key, GFW token) already in scope; no paid
+services and no new heavy dependencies were introduced.

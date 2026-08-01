@@ -339,6 +339,21 @@ def matched_score(presence, matched_weight, fishing_weight, fishing_probability,
     return None if presence is None else round(presence * w, 4)
 
 
+# The vessel-records contract has more than one producer: gfw_vessels.py (source "gfw") and
+# ais_fishing.py (source "ais-heuristic", a local movement heuristic). The evidence tag must reflect
+# which one actually supplied the fishing signal - an event must never claim GFW provenance for a
+# locally-derived prior. Records with no `source` predate the second producer, so they stay "GFW".
+VESSEL_SOURCE_EVIDENCE = {"gfw": "GFW", "ais-heuristic": "AIS-heuristic"}
+
+
+def vessel_evidence_label(vessel):
+    """Evidence tag for a joined vessel record, from its `source` field."""
+    src = str(vessel.get("source") or "").strip().lower()
+    if not src:
+        return "GFW"          # back-compat: gfw_vessels.py was the only producer when this shipped
+    return VESSEL_SOURCE_EVIDENCE.get(src, src.upper())
+
+
 def build_event(idx, det, match, scene_dt_iso, mpa, sensor, matched_weight,
                 vessel=None, fishing_weight=1.0):
     """Map one fused detection onto the CLAUDE.md violation_events schema.
@@ -346,10 +361,11 @@ def build_event(idx, det, match, scene_dt_iso, mpa, sensor, matched_weight,
     A single satellite acquisition is instantaneous, so entry_time == exit_time == the scene
     datetime and duration_hours is null (multi-pass track reconstruction is future work).
 
-    Enrichment (only for a MATCHED event when a GFW vessel record is supplied via --vessels):
-    fills vessel_name/flag/gear_type/imo and fishing_hours/fishing_probability from GFW, adds "GFW"
-    to evidence, and lifts violation_score per matched_score(). With no vessel record the matched
-    score stays presence*matched_weight and the GFW fields stay null - unchanged from AIS-only.
+    Enrichment (only for a MATCHED event when a vessel record is supplied via --vessels): fills
+    vessel_name/flag/gear_type/imo and fishing_hours/fishing_probability, adds the record's source to
+    evidence ("GFW" from gfw_vessels.py, "AIS-heuristic" from ais_fishing.py - see
+    vessel_evidence_label), and lifts violation_score per matched_score(). With no vessel record the
+    matched score stays presence*matched_weight and those fields stay null - unchanged from AIS-only.
     """
     is_dark = match is None
     presence = det.get("confidence")
@@ -374,7 +390,7 @@ def build_event(idx, det, match, scene_dt_iso, mpa, sensor, matched_weight,
 
     evidence = [sensor] if is_dark else [sensor, "AIS"]
     if not is_dark and vessel:
-        evidence.append("GFW")
+        evidence.append(vessel_evidence_label(vessel))
     return {
         "event_id": f"evt_{idx:05d}",
         "detection_id": det.get("detection_id"),

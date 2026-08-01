@@ -440,7 +440,9 @@ This is the **actual emitted shape** (pin it before building consumers). A sibli
     {
       "event_id": "evt_00000",              // rank order (highest violation_score first)
       "detection_id": "det_00001",          // back-reference into detections.json
-      "ais_status": "dark",                 // "dark" (no AIS match) | "matched"
+      "ais_status": "dark",                 // "dark" (detected, no AIS) | "matched" (detected + AIS)
+                                            // | "reported" (AIS inside the MPA, no detection —
+                                            //   written by geofence_ais.py, not fuse_violations)
       "vessel_id": null, "mmsi": null,      // MMSI when matched, else null
       "gfw_vessel_id": null,                // GFW internal id — filled only via --vessels
       "vessel_name": null, "flag": null, "gear_type": null, "imo": null, "iuu_listed": null,  // GFW enrichment
@@ -453,7 +455,9 @@ This is the **actual emitted shape** (pin it before building consumers). A sibli
       "fishing_hours": null, "fishing_probability": null,      // filled only via --vessels (GFW)
       "violation_score": 0.66,              // dark = presence; matched interpolates matched_weight→fishing_weight
       "ais_match": null,                    // null when dark; the matched-ping detail object when matched
-      "evidence": ["Sentinel-2"]            // + "AIS" when matched, + "GFW" when enriched
+      "evidence": ["Sentinel-2"]            // + "AIS" when matched, + the vessel record's source when
+                                            // enriched: "GFW" (gfw_vessels.py) or "AIS-heuristic"
+                                            // (ais_fishing.py). Never claims GFW for a local prior.
     }
   ]
 }

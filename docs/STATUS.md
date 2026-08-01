@@ -1,10 +1,15 @@
 # STATUS — boat detector / active-learning loop
 
-_Snapshot: 2026-07-26 (post label-harvest promotion). Point-in-time; verify against code before trusting specifics._
+_Snapshot: **2026-08-01** (docs refresh; model state unchanged since the 2026-07-26 label-harvest
+promotion). Point-in-time; verify against code before trusting specifics._
 
 This tracks the live state of the satellite ship-detection model and its active-learning
 loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatterns see
-`AUDIT.md`; for the daily GFW/WDPA streams see `../CLAUDE.md`; for the forward plan see `ROADMAP.md`.
+`AUDIT.md`; for the daily GFW/WDPA streams see `../CLAUDE.md`.
+
+**➡ For what to do next, read `ROADMAP.md` → "THE WORK QUEUE"** — it carries the prioritized items
+(W1–W9) with exact commands, acceptance tests and traps, plus a **"Do not re-attempt"** table of
+measured dead ends. This file is the *state*; that one is the *plan*.
 
 ---
 
@@ -13,7 +18,7 @@ loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatte
 - **Live model:** `data/training/weights/best.pt` = the **`finetune-diverse`** run (promoted 2026-07-26, same-day successor to `finetune-bigship`), **deployed at `imgsz 1024`, `conf 0.25`** — the P2 arch warm-started from `finetune-bigship` after the **13-set label harvest** (11 new reviewed scenes folded into TRAIN: Lofoten, Curaçao, SB-Channel lanes, Anacapa, Santos, Kaohsiung, Jebel Ali, Suez ×2, Durban, False Bay; train 659→2,512 images with `--max-neg-ratio 1.0` guarding the reef counter-lesson). `detect_boats.py` defaults bake this in. Backups: `best_finetune-bigship.pt` (prior live), `best_finetune-smallvessel.pt`, `best_finetune-openocean.pt`, `best_finetune-p2-1024.pt`, `best_finetune-aug-1024.pt`, `best_finetune-aug-640.pt`, `best_multiscene.pt`, `best_baseline_pre-multiscene.pt` (see the Model progression table).
 - **Kornati (Adriatic) is the 2nd small-vessel holdout — and it broke the 0.67 story (2026-07-26).** Fresh never-trained region, 16 chips / **156 human boxes**: the then-live `finetune-bigship` scored only **P 0.73 / R 0.37** (CI [0.30, 0.45]) — the Alonnisos 0.67 does **not** transfer cross-region (open problem #4 was right to worry). `finetune-diverse` lifts it to R 0.51 @0.25 (CI [0.42, 0.60]) at F1-parity with the old model's best point (0.560 vs 0.573 — overlapping CIs). **Kornati precision is the named watch item**; no Adriatic scene is in TRAIN (Kornati stays a pure holdout), so the durable lever is more Adriatic/karst-coast data.
 - **The whole in-repo active-learning loop works** end-to-end: `sat_fetch → detect_boats → review_server → export_labels → build_dataset → train → promote → rescan`.
-- **Phase 3 (AIS dark-vessel fusion) — the whole sandbox-buildable pipeline is BUILT & offline-tested (2026-07-23).** Six scripts, each its own module (ingestion never imports the matcher): **`fuse_violations.py`** (the matcher — dark-vs-matched via a velocity-aware feasible-movement envelope; optional `--vessels` GFW enrichment), **`aisstream_fetch.py`** (live AIS → normalized contract), **`marinecadastre_fetch.py`** (historical AIS archive CSV → same contract), **`gfw_vessels.py`** (GFW identity/fishing/Insights; `--region-bbox`/`--wdpa-id` makes fishing_probability MPA-specific), **`report_violations.py`** (ranked CSV + self-contained HTML), and **`scan_violations.py`** (thin batch driver). Schema pinned in `docs/PIPELINE.md`; **98 offline P3 tests** (129 suite-wide), no network/key/ML deps. ✅ **GFW calls live-verified 2026-07-26 at home** — three v3 corrections landed (`events` needs `offset` with `limit`; identity picks the freshest cluster + gear from `combinedSourcesInfo`; insights include is `VESSEL-IDENTITY-IUU-VESSEL-LIST` → 201 flat object), each locked by a real captured-response fixture in `scripts/tests/fixtures/`. ✅ **First real violations landed 2026-07-26 (1C, historical path):** Anacapa Island SMR × MarineCadastre archive → 2 confirmed DARK (one wake vessel); the adjacent-lanes bbox run → 36 matched (all GFW-enriched live; best match 2 s / 362 m) / 7 dark. The first fusion caught + same-day-fixed three matcher/ingest defects (AIS sentinel SOG/COG passthrough, stale-ping admission, envelope-size attribution bias) — see `docs/PHASE3_PLAN.md` 1C. ✅ **AISStream live-verified 2026-07-26** (first connect: Singapore Strait, 41/41 positions kept from 37 vessels, 0 skipped/errors; file fuses cleanly). **Phase 3's definition of done is MET** — 1A+1B+1C all closed 2026-07-26; the only remaining W-item is the optional Skylight cross-check (3B) and the live-capture 1C variant (rolling AIS buffer over a fresh overpass) as an ongoing operational mode.
+- **Phase 3 (AIS dark-vessel fusion) — the whole sandbox-buildable pipeline is BUILT & offline-tested (2026-07-23).** Six scripts, each its own module (ingestion never imports the matcher): **`fuse_violations.py`** (the matcher — dark-vs-matched via a velocity-aware feasible-movement envelope; optional `--vessels` GFW enrichment), **`aisstream_fetch.py`** (live AIS → normalized contract), **`marinecadastre_fetch.py`** (historical AIS archive CSV → same contract), **`gfw_vessels.py`** (GFW identity/fishing/Insights; `--region-bbox`/`--wdpa-id` makes fishing_probability MPA-specific), **`report_violations.py`** (ranked CSV + self-contained HTML), and **`scan_violations.py`** (thin batch driver). Schema pinned in `docs/PIPELINE.md`; **98 offline P3 tests** (203 suite-wide), no network/key/ML deps. ✅ **GFW calls live-verified 2026-07-26 at home** — three v3 corrections landed (`events` needs `offset` with `limit`; identity picks the freshest cluster + gear from `combinedSourcesInfo`; insights include is `VESSEL-IDENTITY-IUU-VESSEL-LIST` → 201 flat object), each locked by a real captured-response fixture in `scripts/tests/fixtures/`. ✅ **First real violations landed 2026-07-26 (1C, historical path):** Anacapa Island SMR × MarineCadastre archive → 2 confirmed DARK (one wake vessel); the adjacent-lanes bbox run → 36 matched (all GFW-enriched live; best match 2 s / 362 m) / 7 dark. The first fusion caught + same-day-fixed three matcher/ingest defects (AIS sentinel SOG/COG passthrough, stale-ping admission, envelope-size attribution bias) — see `docs/PHASE3_PLAN.md` 1C. ✅ **AISStream live-verified 2026-07-26** (first connect: Singapore Strait, 41/41 positions kept from 37 vessels, 0 skipped/errors; file fuses cleanly). **Phase 3's definition of done is MET** — 1A+1B+1C all closed 2026-07-26; the only remaining W-item is the optional Skylight cross-check (3B) and the live-capture 1C variant (rolling AIS buffer over a fresh overpass) as an ongoing operational mode.
 - **Deploy point & operating point** *(2026-07-25 record for the superseded `finetune-smallvessel`; the live `finetune-bigship` deploys at **conf 0.20** — see the first bullet + footnote ⁶)*. On the relabeled holdouts at conf 0.15 / imgsz 1024: **Alonnisos** (small-vessel, 76 boxes) **P 0.40 / R 0.70, FP/chip 1.23, recall 90% CI [0.59, 0.79]**; **Port Said** (big-ship, 42 boxes) **P 0.97 / R 0.69, FP/chip 0.08**. `conf_sweep.py` puts the **F1 peak at conf 0.15** → operating point unchanged. **Plain imgsz 1280 is a non-win:** Port Said identical, Alonnisos recall *drops* 0.70→0.49 (upscaling past the 1024 train size loses the 1–5 px vessels). The **big-ship recall lever is `--augment` (TTA)**, not raw imgsz: `--imgsz 1280 --augment` lifts Port Said recall 0.69→**0.81** (large 0.79→0.86) at unchanged precision — but it is **big-ship-only** (it worsens small-vessel/cluttered scenes), so it stays an opt-in profile, never the default. **Keep imgsz 1024 / conf 0.15; 1536 not worth testing.**
 - **Large-ship recall (0.69) is a training-coverage gap, not a threshold or GSD limit** (2026-07-16): some Port Said misses are unmistakable bright-ship-with-wake signatures; conf 0.05 recovers only 1 more large ship while precision collapses to 0.70. Big ships were learned from just 2 scenes (Fujairah 131 + Gibraltar 29). **Durable fix = scale the big-ship AL loop** (more dense-anchorage scenes → the staged Finland set below targets exactly this).
 - **Alonnisos holdout relabeled (2026-07-16) — trustworthy baseline.** Full human re-review: **76 boats** (was 49 — a ~55% undercount). Corrected labels in TEST via `build_dataset.py --holdout-scene fallbacktest portsaid alonnisos`. This is the honest baseline O3 (hard negatives) is measured against — many earlier "FPs" were real unlabeled boats.
@@ -106,31 +111,61 @@ TRAIN carries ~1,300+ real reviewed boat boxes across big-ship + small-vessel do
 5. ~~CPU-only training~~ **RESOLVED 2026-07-26:** venv torch is now 2.12.1+cu130 on the RTX 4070 (`train.py --device` auto-detects CUDA); a 30-epoch 1024px P2 run takes ~25 min.
 6. **TLS interception** — every fetch needs the CA-bundle + `--insecure-tls` recipe (below), and the auto-mode classifier blocks `--insecure-tls` until authorized in-session.
 7. ~~Minor/cosmetic: stale `BoatDetection` pointers~~ **RESOLVED 2026-07-29:** `export_labels.py`'s header now names `build_dataset.py` → `train.py`, and `detect_boats.py`'s weights-not-found error points at `data/training/weights/` instead of the legacy sibling repo.
+8. **The SAR model has no eval harness** (found 2026-08-01). `eval_holdout.py` hardcodes
+   `TRAIN = REPO/"data"/"training"` (~line 35), so it can only evaluate the **optical** set — the SAR
+   set lives at `data/training_sar/`. Consequence: SAR promote/reject decisions (including rejecting
+   `sar-deep2`) are made without center-distance P/R, FP/chip, bootstrap CIs or size strata — thinner
+   evidence than any optical decision has had. **Fix = ROADMAP W5** (add `--train-dir`, default
+   unchanged). Small and mechanical; it gates trustworthy SAR work (W2).
 
 ## Recommended next steps
 
-**Everything runnable is run (2026-07-26): Phase 3 live-validated end-to-end, 13-set label harvest
-reviewed + retrained + promoted, GPU unlocked.** In impact order:
+**Everything runnable is run.** Phase 3 is live-validated end-to-end, the 13-set label harvest is
+reviewed/retrained/promoted, the GPU is unlocked, all AUDIT P1/P2 findings are closed, and the three
+offline product stages landed 2026-07-29. **The sandbox-buildable backlog is effectively empty — what
+remains is data work needing a GPU and a human labelling chips.**
 
-1. **Attack the Kornati gap (cross-region small-vessel recall, R 0.51 / P 0.57).** Fetch + review 2–3
-   more Adriatic-class scenes (Croatian islands, Greek Ionian, Turkish coast — NOT Kornati itself, it
-   stays a pure holdout), fold in, retrain, re-gate on all 4 holdouts. Same loop as today, ~40 min of
-   review per cycle.
-2. **SAR needs regions, not one more scene:** `sar-deep2` (+Singapore) regressed the Gibraltar gate →
-   next attempt only after 2+ more reviewed deep-water regions or the xView3 transfer (`docs/ROADMAP.md`).
-   `best_sar.pt` = `sar-deep` unchanged; note it scores 0 on unseen regions (per-scene dB stretch), so
-   seed new SAR reviews with `sar_seed.py --water-only --min-depth 12`.
-3. **Operational mode:** run the live product loop — rolling `aisstream_fetch --wdpa-id` buffer over a
-   trafficked MPA + fresh S2 overpass → `scan_violations.py` (the 1C-live variant). Optional: Skylight
-   cross-check (3B, needs registration).
-4. ~~Pending user action: merge the branch to main~~ **DONE 2026-07-29** — work continues on `main`.
+**The full queue with commands, acceptance tests and traps lives in `ROADMAP.md` → THE WORK QUEUE.**
+Summary in impact order:
+
+1. **W1 — Attack the Kornati gap** (cross-region small-vessel recall, R 0.51 / P 0.57). Fetch + review
+   2–3 more Adriatic-class scenes (Croatian islands, Greek Ionian, Turkish coast — **NOT Kornati**, it
+   stays a pure holdout), fold in, retrain, re-gate on all 4 holdouts. ~40 min review + ~25 min GPU per
+   cycle. Highest impact per hour of anything open.
+2. **W2 — SAR needs regions, not one more scene.** `sar-deep2` (+Singapore) regressed the Gibraltar
+   gate → next attempt only after 2+ more reviewed deep-water regions, or the xView3 transfer.
+   `best_sar.pt` = `sar-deep` unchanged; it scores **0 on unseen regions** (per-scene dB stretch), so
+   seed new SAR reviews with `sar_seed.py --water-only --min-depth 12`. **Do W5 first** (below).
+3. **W3 — Operational mode.** The **AIS-only** loop (`aisstream_fetch` → `ais_fishing` →
+   `geofence_ais` → `alert_violations`) needs *only* `AISSTREAM_API_KEY` — no imagery, no overpass
+   timing — so it is now the fastest path to a live result. The full fusion variant additionally needs
+   a fresh overpass inside the AIS capture window.
+4. **W5 — `eval_holdout.py --train-dir`** (the one clearly buildable item left, and it gates W2 —
+   see open problem #8).
 
 **Hygiene round landed 2026-07-29 (before resuming the data loop):** AUDIT #4 (network retry/backoff) is
 closed — one shared policy in `scripts/_http.py` wired into every `requests` call site, plus
 `GDAL_HTTP_MAX_RETRY`/`RETRY_DELAY` on the `/vsicurl` COG reads, so the fetch-heavy work in steps 1–2
 above stops losing a run to a transient 5xx. SAR runs now land in their own `data/raw/sentinel1/` root.
-Suite is 129 offline tests. Not covered: websocket reconnect for `aisstream_fetch.py` (a capture-semantics
-decision, deliberately left open), and retries do **not** help the Avast schannel wall.
+Not covered: websocket reconnect for `aisstream_fetch.py` (a capture-semantics decision, deliberately
+left open), and retries do **not** help the Avast schannel wall.
+
+**Three offline product stages landed 2026-07-29** (the sandbox-buildable Tier-1 roadmap items), taking
+the suite to **203 offline tests**:
+- **`ais_fishing.py`** — infers fishing from AIS *movement* (speed band + sinuosity) and emits the
+  **same vessel-records contract** as `gfw_vessels.py` (`source: "ais-heuristic"`), so `--vessels` reads
+  it unchanged. The fishing term in `violation_score` now works with **no GFW token and no network**.
+- **`geofence_ais.py`** — flags cooperative vessels transmitting from inside the MPA: a third status
+  **`reported`** beside `dark`/`matched`, in the same `violation_events` schema. Scored by *behaviour*
+  (transit floor 0.10 → fishing weight) rather than presence, so legal transit does not drown the signal.
+  Pure-stdlib point-in-polygon; verified against the real Anacapa SMR polygon.
+- **`alert_violations.py`** — the promised alerting interface: severity digest (critical/high/medium/low,
+  IUU forces critical), MPA-grouped, console + markdown, `--exit-code` cron gate. Reads fusion **and**
+  geofence events in one digest.
+
+One provenance bug was found and fixed in passing: `fuse_violations.build_event` hardcoded `"GFW"` as
+the evidence tag for *any* joined vessel record, so a locally-derived fishing prior would have claimed
+GFW provenance. It now derives the label from the record's `source` (`vessel_evidence_label`).
 
 ---
 
@@ -174,5 +209,26 @@ venv/Scripts/python.exe scripts/conf_sweep.py \
 
 **Promote a run** (only after the holdout eval shows recall did not regress):
 ```bash
+# back up the outgoing model first — the backups in weights/ are the audit trail
+cp data/training/weights/best.pt data/training/weights/best_<outgoing-run-name>.pt
 cp data/training/runs/<run>/weights/best.pt data/training/weights/best.pt
+```
+
+**The SAR training flow** (undocumented elsewhere — reconstructed from `data/training_sar/`'s manifest
+2026-08-01). Both `build_dataset.py` and `train.py` are modality-agnostic via `--data`/`--exports`;
+there is no separate SAR script. The SAR set is deliberately a **separate dir tree** so the optical
+`build_dataset.py` default can never sweep SAR chips into `data/training/`:
+```bash
+# exports live in data/processed/sar_training_exports/<tag>/  (tags so far: deep, singapore)
+python scripts/build_dataset.py \
+    --exports data/processed/sar_training_exports \
+    --data data/training_sar \
+    --holdout-scene s1deep-gibraltar
+# P2 arch, yolov8n backbone transfer — NEVER --pretrained best (optical texture priors are wrong)
+python scripts/train.py --weights data/training/yolov8n-p2.yaml --pretrained yolov8n \
+    --data data/training_sar/config.yml --imgsz 1024 --batch 4 \
+    --mosaic 0.5 --close-mosaic 15 --epochs 30 --name sar-deep3
+# NOTE: runs still land under data/training/runs/<name>/ regardless of --data.
+# NOTE: eval_holdout.py CANNOT gate this yet — see open problem #8 / ROADMAP W5.
+cp data/training/runs/sar-deep3/weights/best.pt data/training/weights/best_sar.pt   # if it gates
 ```

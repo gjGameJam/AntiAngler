@@ -1,16 +1,24 @@
 # IMPROVEMENT PLAN — optical (Sentinel-2) & radar (Sentinel-1 SAR) detectors
 
-_Created 2026-07-16. Two **separate** models (different sensors, different failure modes):
-the optical `best.pt` (live) and the SAR `best_sar.pt` (not built yet). This plan targets
-**accuracy** — precision (kill false positives) and recall (catch real vessels) — grounded in the
-2026-07-15/16 optical-vs-SAR review. Read `docs/STATUS.md` for live model numbers, `docs/ROADMAP.md`
-for the phase structure this feeds. Priorities are ordered by (impact ÷ effort)._
+_Created 2026-07-16, **refreshed 2026-08-01**. Two **separate** models (different sensors, different
+failure modes): the optical `best.pt` (`finetune-diverse`, live at imgsz 1024 / conf 0.25) and the SAR
+`best_sar.pt` (`sar-deep`, live but thin). This plan targets **accuracy** — precision (kill false
+positives) and recall (catch real vessels) — grounded in the 2026-07-15/16 optical-vs-SAR review.
+Priorities are ordered by (impact ÷ effort)._
 
-_**Refreshed 2026-07-23:** **O7 (the AIS-mismatch join) is now BUILT** — the whole Phase-3 fusion
-pipeline exists (`fuse_violations.py` + the AIS/GFW ingesters; `docs/PHASE3_PLAN.md`), so the strategic
-precision endgame is available today, not future. O1 (water mask) and O2 (NDWI) shipped; the O3
-negative-ratio safeguard is built. The open accuracy work is **O3** (same-region hard negatives), **O4**
-(more diverse positives + a 2nd holdout), **O6** (eval hardening), and the whole SAR track (Part 2)._
+**Where this file sits:** `docs/STATUS.md` = live model numbers · **`docs/ROADMAP.md` → THE WORK QUEUE
+= the prioritized plan with commands** · this file = the *why* and the measurement detail behind each
+lever. The W-items in ROADMAP map onto the levers here: **W1 → O4**, **W4 → O3**, **W2 → S1/S2/S4**,
+**W5 → O6 (SAR)**, **W6 → S6**, **W7 → S7**.
+
+_**Status of the levers (2026-08-01).** Closed: **O1** water mask (shipped), **O2** NDWI (built — a
+**calibrated non-win**, off by default), **O5** inference tuning (measured — imgsz 1024 confirmed, 1280
+a non-win), **O6** eval harness (exercised; a 2nd small-vessel holdout — Kornati — now exists), **O7**
+the AIS-mismatch join (built AND live-validated). SAR **S1–S5 are done** for one region-family:
+`best_sar.pt` exists, trained on `data/processed/sar_training_exports/` through the same review loop.
+**Still open: O3** (same-region hard negatives), **O4** (more diverse positives — now specifically
+Adriatic-class, see the Kornati result below), **S6** (speckle A/B), **S7** (cross-modality), and the
+**SAR generalization problem** S1–S4 exposed._
 
 ## What the review actually showed (the diagnosis)
 
@@ -133,11 +141,22 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
   empty-water chips). The discipline that matters is **re-checking holdout recall after every retrain that
   adds negatives**, not a specific ratio.
 
-### O4 — More diverse real positives (the proven engine — highest recall leverage)
-- **Why:** real diverse data closed both generalization gaps (cross-region, cross-type) — twice. Remaining
-  gaps: **smaller artisanal/pleasure boats**, **other regions/sea-states** (Atlantic, tropical, high-lat),
-  and a **2nd small-vessel holdout** to confirm the 0.67 magnitude.
-- **How:** the in-repo loop, holding out each fresh scene *before* folding it in; keep one rotating holdout.
+### O4 — More diverse real positives (the proven engine — highest recall leverage) → **ROADMAP W1**
+- **Why:** real diverse data closed every generalization gap it was pointed at — **four times**
+  (cross-region via open-ocean, cross-type via small-vessel Med, big-ship via Gulf-of-Finland, broad
+  diversity via the 13-set harvest).
+- **⚠️ The 2nd small-vessel holdout landed 2026-07-26, and it falsified the optimistic reading.**
+  Kornati (Adriatic, 16 chips / **156 human boxes**, never in TRAIN) scored only **R 0.37** on the
+  then-live `finetune-bigship` — the Alonnisos 0.67 **did not transfer cross-region**.
+  `finetune-diverse` lifts it to **R 0.51 / P 0.57 @0.25** (CI [0.42, 0.60]), still far below
+  Alonnisos's 0.80. **Conclusion: recall generalizes within a region-class, not across one.** Small
+  vessels in Aegean water are not the same problem as small vessels on a karst coast.
+- **Remaining gaps, most valuable first:** **Adriatic/karst-coast** (the measured hole — W1),
+  smaller **artisanal/pleasure** boats, and other **sea-states/latitudes** (Atlantic, tropical, high-lat).
+- **How:** the in-repo loop, holding out each fresh scene *before* folding it in. **Kornati stays a
+  pure holdout** — never fold it in, or the only cross-region small-vessel gate is lost.
+- **Watch item:** Kornati precision (FP/chip **3.81** @0.25 vs the old deploy's 3.31). If recall
+  climbs while precision craters, that is the **O3** signal, not a reason to reject the model.
 
 ### O5 — Inference / tiling tuning ✅ **MEASURED (2026-07-25) — imgsz 1024 + conf 0.15 confirmed; 1280 a non-win**
 - **imgsz 1280 (plain, no TTA) does NOT help** — measured on the live `best.pt` (finetune-smallvessel) at
@@ -181,34 +200,59 @@ Alonnisos completely) + the O7 AIS join. Recall (O4) stays the parallel track.
   vessels. This *inverts* the metric from recall (GSD-capped) to mismatch precision (improvable). It's the
   payoff that makes a modest detector "good enough" — see `docs/ROADMAP.md` Phase 3. Complementary to
   O1-O4, not a substitute.
-- **Status:** the fusion layer is built and offline-tested — `fuse_violations.py` (matcher) + the AIS
-  ingesters (`aisstream_fetch.py`, `marinecadastre_fetch.py`) + the GFW join (`gfw_vessels.py`). What
-  remains is 🏠 do-from-home: live-validate the AISStream/GFW calls over a real MPA (`docs/PHASE3_PLAN.md`
-  Workstream 1). So the FP-filtering endgame is available *now* over any run + AIS file.
+- **Status: ✅ BUILT AND LIVE-VALIDATED (2026-07-26).** `fuse_violations.py` (matcher) + the AIS
+  ingesters (`aisstream_fetch.py`, `marinecadastre_fetch.py`) + the GFW join (`gfw_vessels.py`), plus
+  the 2026-07-29 additions (`ais_fishing.py`, `geofence_ais.py`, `alert_violations.py`). Real
+  violations produced over Anacapa Island SMR. **The FP-filtering endgame is available today** over any
+  run + AIS file — and `ais_fishing.py` means the fishing term works with **no GFW token and no
+  network**. Remaining: the near-real-time operational mode (ROADMAP **W3**).
 
-**Recommended optical sequence:** Step 0 → **O1 (+O2a NDWI mask)** → **O3** → **O4 ongoing** → O6 → O5, with
-O7 as the strategic overlay. **O5 (inference tuning) and O6 (harness) are now measured/exercised
-(2026-07-25)** — imgsz 1024 + conf 0.15 is the confirmed operating point (1280 a non-win), so the remaining
-optical accuracy work is the data-driven levers **O3** (same-region hard negatives) and **O4** (diverse
-positives + a 2nd small-vessel holdout), both 🏠 do-from-home (fetch + GPU + human review).
+**Recommended optical sequence:** Step 0 → **O1 (+O2a NDWI mask)** → **O3** → **O4 ongoing** → O6 → O5,
+with O7 as the strategic overlay. O1, O2, O5, O6 and O7 are all now closed (see the status block at the
+top), so **the remaining optical accuracy work is exactly the two data-driven levers**: **O4** (diverse
+positives — specifically Adriatic-class → ROADMAP **W1**) and **O3** (same-region hard negatives →
+**W4**). Both are 🏠 do-from-home (fetch + GPU + human review). **Order matters: O4 before O3** — new
+positives change the FP mix, so negatives mined first would target a distribution that no longer exists.
+
+> ⚠️ **Reading the conf numbers below.** O5/O6 were measured **2026-07-25 on `finetune-smallvessel`**,
+> whose operating point was **conf 0.15**. Two promotions have happened since, and the deploy conf has
+> moved **+0.05 each time** (0.15 → 0.20 → **0.25**, the live value). The *conclusions* still hold
+> (imgsz 1024 is right, 1280 is a non-win, the F1 peak is found with `conf_sweep.py`); the *absolute
+> conf and P/R figures* in O5/O6 are historical. Live numbers are in `docs/STATUS.md`.
 
 ---
 
-## Part 2 — Radar (SAR) model — build `best_sar.pt`
+## Part 2 — Radar (SAR) model — `best_sar.pt` exists; the open problem is **generalization**
 
 **Scope decision from the review: target LARGER / metallic vessels (the dark-ship / AIS-off mission).**
 Do not expect SAR to match optical on small artisanal boats — C-band barely returns them. Budget for
 speckle + coastal clutter as the dominant FP sources.
 
-| # | Lever | Attacks | Effort | Notes |
+> **Status 2026-08-01.** `best_sar.pt` = **`sar-deep`** (promoted 2026-07-26): P2 arch, `yolov8n`
+> backbone transfer, 30 epochs in 76 s on the RTX 4070, trained on 149 chips / 206 vessel boxes / 112
+> hard-negatives from **one region-family** (Fujairah / Gibraltar / Hormuz — warm, deep, Gulf-like).
+> Gibraltar test split: **P 0.392 / R 0.478 / mAP50 0.335**.
+>
+> **The measured problem: it does not generalize across regions.** On a fresh Singapore Strait scene it
+> scored **0 hits at conf 0.15** — because `providers/s1.py` applies a **per-scene dB percentile
+> stretch**, every new region is a different pixel distribution, and a 206-box model is immediately
+> out-of-domain. The obvious fix failed too: retraining with the Singapore scene folded in
+> (`sar-deep2`, +267 boxes) **regressed the Gibraltar gate** (P 0.392→0.285, R 0.478→0.435) and was not
+> promoted. Singapore data stays staged in `data/training_sar/` for the next attempt.
+>
+> **⚠️ And the gate itself is weak: `eval_holdout.py` cannot evaluate the SAR set at all** (it
+> hardcodes `data/training/`), so that reject decision rested on ultralytics' own metrics over 23 test
+> boxes — no center-distance P/R, no FP/chip, no CI. **Fix that first (ROADMAP W5).**
+
+| # | Lever | Attacks | Effort | Status |
 |---|---|---|---|---|
-| S1 | Training data: xView3-SAR (+HRSID/SAR-Ship) | build | med | closest analog: S1 dual-pol, dark-vessel labels + length |
-| S2 | Preprocessing alignment to the provider chips | build (critical) | med | train == inference representation or it fails |
-| S3 | Land/water mask (shared with O1) | precision | low-med | coastal clutter is the top SAR FP |
-| S4 | Train separate P2 SAR model | build | med | NOT warm-started from optical `best.pt` |
-| S5 | Real S1 holdout via HITL review | trust | med | honest eval on our own chips |
-| S6 | Speckle filter (Lee/Refined-Lee) A/B | precision/recall | low | may erase 1-5 px targets — test, don't assume |
-| S7 | Cross-modality S1×S2 validation | trust | low | already have Fujairah/Singapore/Cyclades pairs |
+| S1 | Training data: xView3-SAR (+HRSID/SAR-Ship) | build | med | ⬜ **the big open lever** (registration-gated) — own labelled set exists instead |
+| S2 | Preprocessing alignment to the provider chips | build (critical) | med | ✅ satisfied for own data (chips *are* provider output); **critical if S1 lands** |
+| S3 | Land/water mask (shared with O1) | precision | low-med | ✅ `sar_seed.py --water-only` + `--min-depth` (GEBCO) |
+| S4 | Train separate P2 SAR model | build | med | ✅ `sar-deep` promoted; **retrain blocked on region diversity** |
+| S5 | Real S1 holdout via HITL review | trust | med | ✅ Gibraltar held out — but see the harness gap above |
+| S6 | Speckle filter (Lee/Refined-Lee) A/B | precision/recall | low | ⬜ open (**W6**) — may erase 1-5 px targets; test, don't assume |
+| S7 | Cross-modality S1×S2 validation | trust | low | ⬜ open (**W7**) — Fujairah/Singapore/Cyclades pairs already on disk |
 
 ### S1 — Training data
 - **xView3-SAR** (arXiv 2206.00897): Sentinel-1 dual-pol VV/VH, maritime, dark-vessel labels with vessel
@@ -253,8 +297,14 @@ speckle + coastal clutter as the dominant FP sources.
 
 - **Shared water-mask utility** serves O1 **and** S3 — build once (`scripts/` helper), consume from both
   `detect_boats.py` paths.
-- **Fix the SAR run-dir misnomer:** SAR fetches currently write under `data/raw/sentinel2/` (the default
-  `--output-dir`). Add `data/raw/sentinel1/` so modalities don't mix (cosmetic, do alongside SAR work).
+- ~~**Fix the SAR run-dir misnomer**~~ ✅ **DONE 2026-07-29:** `Provider.output_subdir` now picks the run
+  root (`sentinel2` for `pc`, `sentinel1` for `s1`), so modalities never share a directory. Purely
+  additive — pre-2026-07-29 SAR runs still live under `data/raw/sentinel2/` and still work, since every
+  downstream stage takes an explicit `--run`.
+- **Keep the two training trees separate.** `data/processed/training_exports/` is **optical-only**
+  (`build_dataset.py` sweeps *every* tag there into `data/training/`); SAR exports go to
+  `data/processed/sar_training_exports/` → `data/training_sar/`. Dropping a SAR export in the optical
+  dir would silently poison the optical training set.
 - **The active-learning HITL loop is the engine for both models** — every accuracy lever above flows
   through fetch → detect → review → export → build → train → promote, with a held-out scene each round.
 - **Phase 3 AIS fusion (O7) is the precision endgame for both** — it filters each model's false positives

@@ -74,7 +74,7 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 5. **CI runs no lint/compile/test** — ✅ **DONE (2026-07-23).** `.github/workflows/tests.yml` runs on
    every push + PR: `python -m compileall -q scripts` (syntax gate for the whole repo, including the
    heavy ML/geo scripts — compileall parses, doesn't import) + `python -m unittest discover -s
-   scripts/tests` (the 129-test offline suite). Pure stdlib, no credentials/deps — free coverage. A
+   scripts/tests` (the 203-test offline suite). Pure stdlib, no credentials/deps — free coverage. A
    syntax error in any script or a P3 regression now fails CI instead of shipping. (`ruff check` could
    be added later as an optional lint step.)
 

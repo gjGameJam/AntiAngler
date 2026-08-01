@@ -220,6 +220,14 @@ data/raw/ais/
 # Normalized GFW per-vessel identity/activity records written by scripts/gfw_vessels.py
 data/raw/gfw_vessels/
 
+# Locally-inferred fishing records written by scripts/ais_fishing.py — the same vessel-records
+# contract as gfw_vessels/, derived from AIS movement instead of the GFW API (source: ais-heuristic)
+data/raw/ais_fishing/
+
+# AIS-only in-MPA events ("reported" status) written by scripts/geofence_ais.py — the
+# violation_events schema, produced from AIS + an MPA polygon with no imagery involved
+data/raw/ais_geofence/
+
 # Sentinel-2 optical imagery chip runs written by scripts/sat_fetch.py (--provider pc)
 data/raw/sentinel2/
 
