@@ -240,9 +240,14 @@ speckle + coastal clutter as the dominant FP sources.
 > (`sar-deep2`, +267 boxes) **regressed the Gibraltar gate** (P 0.392→0.285, R 0.478→0.435) and was not
 > promoted. Singapore data stays staged in `data/training_sar/` for the next attempt.
 >
-> **⚠️ And the gate itself is weak: `eval_holdout.py` cannot evaluate the SAR set at all** (it
-> hardcodes `data/training/`), so that reject decision rested on ultralytics' own metrics over 23 test
-> boxes — no center-distance P/R, no FP/chip, no CI. **Fix that first (ROADMAP W5).**
+> **⚠️ The gate was weak — fixed 2026-08-03 (ROADMAP W5), and the fix made the picture worse, not
+> better.** `eval_holdout.py`/`conf_sweep.py` now take `--train-dir data/training_sar` and reproduce
+> the recorded Gibraltar gate exactly (P 0.392 / R 0.478 / mAP50 0.335). But the sweep shows **that
+> pair is the conf-≈0.10 point**, where the in-sample Fujairah probe fires **24.9 dets/chip**; F1
+> peaks at just **0.415**, recall ceilings at ~0.70 (conf 0.05), and the 90% recall CI is **[0.27,
+> 0.67]** on 23 boxes. So the `sar-deep2` reject was indeed within noise, and `best_sar.pt` still has
+> **no deployable operating point** — a model problem (S1/S2: more regions, or xView3 transfer), not a
+> threshold one. Quote a *swept* conf for any future SAR candidate, never ultralytics' `val` pair.
 
 | # | Lever | Attacks | Effort | Status |
 |---|---|---|---|---|

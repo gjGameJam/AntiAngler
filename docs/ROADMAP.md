@@ -21,7 +21,7 @@ machine, not in repo)._
 | **Optical detector** | `data/training/weights/best.pt` = **`finetune-diverse`** (promoted 2026-07-26). YOLOv8n-**P2** on Sentinel-2 10 m RGB. **Deploy: `imgsz 1024`, `conf 0.25`** — baked into `detect_boats.py` defaults. |
 | **SAR detector** | `data/training/weights/best_sar.pt` = **`sar-deep`** (promoted 2026-07-26). Thin first model (206 boxes / 1 region-family). **`sar-deep2` was NOT promoted** — it regressed the Gibraltar gate. |
 | **Phase 3 (AIS fusion)** | **All stages built, offline-tested, AND live-validated** (2026-07-26). Definition of done **met**. |
-| **Offline test suite** | **203 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
+| **Offline test suite** | **253 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
 | **Code health** | All `docs/AUDIT.md` P1/P2 findings closed. The P3 items are conscious house-style deferrals, not debt. |
 
 **Four holdout scenes anchor every optical gate.** These are the numbers a candidate model must beat
@@ -82,11 +82,11 @@ needs a GPU and a human labelling chips — the loop is proven, it just has to b
 
 | # | Item | Attacks | Effort | Blocker |
 |---|---|---|---|---|
-| **W1** | Adriatic optical scenes → retrain → re-gate | recall (Kornati gap) | M (~1.5 h/cycle) | 🏠 fetch + review + GPU |
+| ~~**W1**~~ | ~~Adriatic optical scenes → retrain → re-gate~~ | recall (Kornati gap) | — | ✅ **RUN 2026-08-02 — see "W1 outcome" below. Bought precision, NOT recall.** |
 | **W2** | SAR region diversity **or** xView3 transfer | SAR generalization | M–L | 🏠 review + GPU (xView3 also gated download) |
 | **W3** | Live operational loop over a trafficked MPA | product proof | S–M | 🏠 `AISSTREAM_API_KEY` |
 | **W4** | O3 same-region hard negatives | precision | M | 🏠 — **and do W1 first** |
-| **W5** | `eval_holdout.py --train-dir` (SAR gating harness) | trust / unblocks W2 | S | 🟢 buildable now |
+| ~~**W5**~~ | ~~`eval_holdout.py --train-dir` (SAR gating harness)~~ | trust / unblocks W2 | — | ✅ **DONE 2026-08-03 — see "W5 outcome" below. W2's blocker is cleared, and the SAR gate turned out weaker than recorded.** |
 | **W6** | S6 speckle-filter A/B | SAR precision/recall | S | 🏠 GPU |
 | **W7** | S7 cross-modality S1×S2 check | trust | S–M | 🏠 paired scenes |
 | **W8** | Websocket reconnect for `aisstream_fetch.py` | W3 robustness | S | 🟢 — but decide semantics first |
@@ -124,10 +124,19 @@ python scripts/build_dataset.py \
     --holdout-scene fallbacktest portsaid alonnisos kornati-adriatic --max-neg-ratio 1.0
 python scripts/train.py --weights data/training/yolov8n-p2.yaml --pretrained best \
     --imgsz 1024 --batch 4 --mosaic 0.5 --close-mosaic 15 --epochs 30 --name finetune-adriatic
-# 6. Gate on all four holdouts, then pick the operating point
-python scripts/eval_holdout.py --old data/training/weights/best.pt --old-imgsz 1024 \
-    --new data/training/runs/finetune-adriatic/weights/best.pt --new-imgsz 1024
-python scripts/conf_sweep.py --weights data/training/runs/finetune-adriatic/weights/best.pt --imgsz 1024
+# 6. Gate on all four holdouts, then pick the operating point.
+#    ⚠️ eval_holdout.py defaults to the 'fallbacktest' holdout ONLY. A bare invocation silently
+#    gates on Singapore's 26 boxes and says nothing about the other three. You MUST loop --holdout.
+for H in kornati-adriatic alonnisos portsaid fallbacktest; do
+  python scripts/eval_holdout.py --old data/training/weights/best.pt --old-imgsz 1024 \
+      --new data/training/runs/finetune-adriatic/weights/best.pt --new-imgsz 1024 --holdout "$H"
+  python scripts/conf_sweep.py --weights data/training/runs/finetune-adriatic/weights/best.pt \
+      --imgsz 1024 --holdout "$H"
+done
+#    Sweep BOTH models, not just the new one: a retrain can move the operating point in either
+#    direction, and comparing a new model at the old model's conf measures the threshold, not the
+#    model. Re-run eval_holdout --conf <new deploy conf> to get bootstrap CIs at the point you
+#    actually intend to ship.
 # 7. Promote ONLY if the gate passes (back up the current best.pt first!)
 cp data/training/weights/best.pt data/training/weights/best_finetune-diverse.pt
 cp data/training/runs/finetune-adriatic/weights/best.pt data/training/weights/best.pt
@@ -142,10 +151,42 @@ one, and **no other holdout regresses** (Alonnisos 0.80 / Port Said 0.79 / Singa
 - **Kornati precision is the standing watch item** (FP/chip 3.81 @0.25). If precision craters while
   recall climbs, that is the W4 (hard negatives) signal, not a reason to reject the model.
 - **Keep `--max-neg-ratio 1.0`.** This guards the `finetune-reef` counter-lesson (see below).
-- **Deploy conf has moved +0.05 at each of the last two promotions** (0.15→0.20→0.25) as recall
-  improved. Let `conf_sweep.py` decide; do not assume 0.25 carries over.
+- **Deploy conf is NOT monotonic.** It moved +0.05 at each of two promotions (0.15→0.20→0.25), then
+  **back down to 0.20** for `finetune-adriatic`. Let `conf_sweep.py` decide, in both directions.
 - Re-apply the scene-aware holdout after `build_dataset.py` if you bypass `--holdout-scene`
   (snippet in `docs/STATUS.md` → Operational recipes).
+
+### W1 outcome (2026-08-02) — ran in full; the premise was half right
+
+**Done:** 3 scenes fetched (`sibenik-primosten` + `hvar-pakleni`, HR; `gocek-fethiye`, TR — all 16
+chips, 100% AOI cover / 0% AOI cloud), reviewed to **1093 boat boxes** (692 confirmed + 401 drawn,
+only 19 false positives → the live model ran at **P 0.973 / R 0.63** on these scenes). Export tag
+`2026-08-02`; TRAIN grew 2512→2725. Three schedules trained.
+
+**Result: the Kornati recall ceiling did NOT move. The gain was precision.**
+
+| Model | Schedule | Best avg F1 (4 holdouts) | Base mAP50 |
+|---|---|---|---|
+| `finetune-diverse` | — | 0.707 @0.30 | 0.614 |
+| **`finetune-adriatic`** ✅ promoted | 30 ep | 0.705 @0.25 | **0.640** |
+| `finetune-adriatic-60ep-b` | 60 ep | 0.706 @0.20 | 0.608 |
+
+Aggregate holdout F1 is **tied within noise across all three**. Kornati's recall *ceiling* (conf 0.05)
+is 0.904 → 0.891 — unchanged. What did improve is the **precision–recall tradeoff**: at matched
+precision ≈0.47 the new models find 0.756–0.788 recall where the live model found 0.673, and
+**open-water false alarms fell ~45%** (1.43 → 0.79 dets/chip @0.20) — a direct hit on STATUS open
+problem #1. Promoted `finetune-adriatic` at **conf 0.20** (the only candidate with *zero* forgetting;
+the 60-epoch run gained Kornati recall but lost base recall 0.585→0.556 and regressed Port Said).
+
+**Acceptance test: NOT met.** Kornati R 0.590 @0.20, CI [0.50, 0.68], **overlaps** the live model's
+[0.42, 0.60]; Singapore regressed 0.769→0.731. Promoted anyway as a deliberate call for the FP win.
+
+**What this means for W4 and beyond.** More same-class data is now a **measured** dead end for Kornati
+*recall* — three schedules on 1093 fresh in-class boxes moved aggregate F1 by ±0.002. Kornati R ~0.5–0.6
+at usable precision looks like the **10 m GSD floor** for that scene's small craft, not a data gap. Do
+not spend another review cycle on Adriatic-class optical expecting recall. The remaining levers for
+Kornati are structural, not optical: **SAR (W2)** and **AIS fusion (W3)**. Note the precision win means
+**W4 (hard negatives) is now lower priority** — this cycle already delivered most of what W4 targeted.
 
 ---
 
@@ -200,9 +241,20 @@ inference see the same distribution. Training on raw amplitude or any other stre
 **Acceptance:** the Gibraltar gate does not regress (P ≥ 0.39 / R ≥ 0.48 / mAP50 ≥ 0.335) **and** the
 new region scores non-zero on its own held-out chips.
 
-**Blocker to clear first: W5.** `eval_holdout.py` hardcodes `data/training/`, so it **cannot evaluate
-the SAR set at all** — there is currently no equivalent tiny-object gate for SAR. Do W5 first or the
-gate stays eyeball-grade.
+**Blocker W5 is CLEARED (2026-08-03).** Gate a candidate with the same harness the optical models get:
+```bash
+python scripts/eval_holdout.py --train-dir data/training_sar --holdout s1deep-gibraltar \
+    --imgsz 1024 --conf <swept> --fp-scenes s1deep-fujairah \
+    --old data/training/weights/best_sar.pt --new data/training/runs/sar-deep3/weights/best.pt
+python scripts/conf_sweep.py --train-dir data/training_sar --holdout s1deep-gibraltar \
+    --fp-scene s1deep-fujairah --imgsz 1024   # sweep BOTH models; SAR has never had a swept deploy conf
+```
+**But W5 also showed the current gate is weaker than its recorded numbers** (see "W5 outcome"):
+`sar-deep`'s P 0.392 / R 0.478 sits at **conf ≈0.10**, where the in-sample Fujairah probe fires
+**24.9 dets/chip**, and the recall CI is **[0.27, 0.67]** on 23 boxes. So: quote a swept operating
+point for any `sar-deep3`, and treat "did not regress the Gibraltar gate" as necessary but not
+sufficient — with a CI that wide, a thin win is indistinguishable from noise. A second reviewed
+region in TEST would do more for the gate's power than any tuning.
 
 **Never warm-start SAR from the optical `best.pt`** — wrong texture priors. Use `--pretrained yolov8n`
 or a SAR-pretrained backbone.
@@ -269,19 +321,67 @@ over-conservative and dropped *both* recall and base mAP. Negatives are a scalpe
 
 ---
 
-## W5 — Give `eval_holdout.py` a `--train-dir` 🟢 *(buildable now, unblocks W2)*
+## W5 — Give `eval_holdout.py` a `--train-dir` ✅ **DONE 2026-08-03**
 
-**Why.** `eval_holdout.py` hardcodes `TRAIN = REPO/"data"/"training"` (line ~35), so it can only ever
+**Why (original).** `eval_holdout.py` hardcoded `TRAIN = REPO/"data"/"training"`, so it could only ever
 evaluate the **optical** set. The SAR model lives at `data/training_sar/`, which means **the SAR gate
-has no tiny-object harness** — no center-distance P/R, no FP/chip, no bootstrap CI, no size strata.
+had no tiny-object harness** — no center-distance P/R, no FP/chip, no bootstrap CI, no size strata.
 The `sar-deep2` promote/reject decision was made on thinner evidence than any optical decision has been.
 
-**Do:** add `--train-dir` (default `data/training`) to `eval_holdout.py`, and the same to
-`conf_sweep.py` if it shares the assumption. Small, mechanical, no new deps. Running it needs
-ultralytics + a GPU, but the change itself is sandbox-buildable.
+**Shipped.** `--train-dir` (default `data/training`) on **both** `eval_holdout.py` and `conf_sweep.py`,
+plus the guards that make a cross-modality gate honest:
 
-**Acceptance:** `eval_holdout.py --train-dir data/training_sar --holdout s1deep-gibraltar` reproduces
-the Gibraltar gate numbers with CIs.
+- **`PROMOTED_BY_TREE`** maps a dataset tree to the checkpoint that gates it
+  (`data/training`→`best.pt`, `data/training_sar`→`best_sar.pt`). Both checkpoints live in the *same*
+  `data/training/weights/`, so nothing on disk links a tree to its model — without the table a bare
+  SAR gate would have defaulted to the **optical** `best.pt` and printed authoritative-looking garbage.
+  An unregistered tree errors with an inventory of available weights; **add a row for a new modality.**
+- **A zero-match `--holdout` is now a hard error** listing the scenes that *are* in the split, raised
+  before any weight loads. It used to sail through and report `P=R=0.000` over zero chips.
+- **A zero-chip FP probe is skipped with a warning** instead of reporting `0` detections — on the SAR
+  tree the optical probe defaults (`gbr-cairns-reefs`, `testrun`) match nothing, and `0` reads as
+  "no false positives". `conf_sweep`'s open-water column prints `n/a` for the same reason.
+- **An explicit-but-missing `--old`/`--new`/`--weights` errors.** It used to be dropped silently, so a
+  typo'd candidate path made the run compare the old model against *itself* and look like "no regression".
+- **`ultralytics` is now lazy-imported** (`load_yolo()`), so both scripts are importable stdlib-only and
+  the gate's logic is covered by **50 new offline tests** (`scripts/tests/test_eval_holdout.py`; suite
+  203→**253**) — matching/strata/bootstrap/subset code that decides promotions and had none.
+
+**Acceptance: MET.** `eval_holdout.py --train-dir data/training_sar --holdout s1deep-gibraltar
+--imgsz 1024` reproduces the recorded Gibraltar gate **exactly** — P 0.392 / R 0.478 / mAP50 0.335 —
+and the built subset's mAP50 equals the tree's own test split, confirming it selects precisely the
+Gibraltar chips. Optical back-compat re-verified on real numbers: Kornati **P 0.558 / R 0.590 @0.20**,
+CI [0.50, 0.68], base mAP50 0.640, open-water probe 0.79 dets/chip — all matching `docs/STATUS.md`.
+
+### W5 outcome — the harness immediately devalued the SAR gate
+
+Running it revealed that `best_sar.pt` is **materially weaker than "P 0.392 / R 0.478" suggested**,
+because that pair is not a deployable operating point. `conf_sweep.py` on the same tree:
+
+| conf | P | R | F1 | FP/chip | Fujairah dets/chip |
+|---|---|---|---|---|---|
+| 0.05 | 0.286 | 0.696 | 0.405 | 1.14 | 35.4 |
+| **0.10** | 0.367 | **0.478** | **0.415** ⬅ peak | 0.54 | 24.9 |
+| 0.20 | 0.462 | 0.261 | 0.333 | 0.20 | 16.2 |
+| 0.25 | 0.714 | 0.217 | 0.333 | 0.06 | 13.3 |
+
+Three things follow:
+1. **The recorded gate sits at ≈conf 0.10** — the sweep recovers R 0.478 (11/23) exactly there. Every
+   optical model is quoted at a swept deploy conf (0.20–0.25); the SAR model never was.
+2. **There is no usable operating point yet.** At the F1 peak the in-sample Fujairah probe fires
+   **24.9 dets/chip**; pushing conf up to quiet it costs almost all recall (0.478→0.217 by conf 0.25).
+   *Caveat: Fujairah is a busy anchorage in TRAIN, so that probe is directional and includes real
+   vessels — it is NOT comparable to the optical near-empty probes (0.79 dets/chip).*
+3. **Recall ceiling ~0.70** (conf 0.05), and the 90% bootstrap CI at conf 0.10 is **[0.27, 0.67]** — so
+   wide on 23 boxes that the `sar-deep2` reject was, as suspected, within noise.
+
+**Also learned:** all 23 SAR ground-truth boxes are **>5 px**, so the `1-2px`/`3-5px` strata are empty
+and carry no signal for SAR. If the strata should discriminate on this modality they need SAR-specific
+bin edges — the tiny-object problem that motivated them is an *optical* 10 m-GSD artifact.
+
+**What this means for W2:** the gate is no longer eyeball-grade, but it is still **thin** (35 chips /
+23 boxes, CI ±0.2). Treat clearing it as necessary, not sufficient, and report the swept operating
+point — never ultralytics' `val` pair — when proposing `sar-deep3`.
 
 ---
 
@@ -340,6 +440,8 @@ future session does not rediscover them. Do not undo these conclusions without n
 | **Raising `--conf` to fix precision** | ❌ wrong tool | Trades away the recall the 10 m GSD already caps. The architecture is deliberately *recall-favouring candidate generation, then filter downstream* (water mask → AIS fusion). |
 | **Paid/commercial imagery (Planet, VHR)** | ⛔ out of scope | Hard $0-budget constraint. Refs were removed deliberately; do not reintroduce. |
 | **batch 16 @ imgsz 1024 with the P2 head** | 💥 crashes | Silent torch C++ abort mid-epoch. Use **`--batch 4`** (plateaus ~7 GB). |
+| **More Adriatic-class optical data to lift Kornati *recall*** | ❌ measured dead end (2026-08-02) | W1 ran in full: 3 in-class scenes, **1093 fresh boxes**, 3 schedules (30/60/60-corrected). Aggregate 4-holdout F1 moved **±0.002**; Kornati's recall ceiling 0.904→0.891 (unchanged). It *did* buy precision (~45% fewer open-water FPs). Kornati R ~0.5–0.6 at usable precision is the **10 m GSD floor**, not a data gap → go structural (SAR/AIS), not more optical. |
+| **Longer training (60 ep) to squeeze more from a warm start** | ❌ non-win + forgetting | Satellite val mAP50 rose 0.785→0.798 but holdout F1 did **not** follow (0.705→0.706), and base-photo recall *fell* 0.585→0.556. Val mAP50 is a poor proxy for the holdout gates. Also: `close_mosaic` counts back from the END of training, so holding it at 15 while doubling epochs moved the mosaic-free phase to epoch 46 and patience-20 early-stopped at 21 with "best = epoch 1". **Scale `--close-mosaic` proportionally with `--epochs`.** |
 
 ---
 
@@ -642,6 +744,7 @@ commercial VHR/SAR per-alert tasking). Recorded as the north-star vision, not a 
 |---|---|
 | Evaluate candidate @1024 | `eval_holdout.py --old .../best.pt --old-imgsz 1024 --new <run>/best.pt --new-imgsz 1024` |
 | Pick operating point | `conf_sweep.py --weights <run>/best.pt --imgsz 1024` |
+| **Gate a SAR candidate** | same two, plus `--train-dir data/training_sar --holdout s1deep-gibraltar --fp-scenes s1deep-fujairah` (`--fp-scene`, singular, for `conf_sweep`). Weights default to `best_sar.pt` via `PROMOTED_BY_TREE` — the optical default can no longer leak into a SAR gate |
 | Re-apply scene holdout after `build_dataset.py` | snippet in `docs/STATUS.md` (Operational recipes) |
 | Promote | `cp <run>/weights/best.pt data/training/weights/best.pt` (back up first) |
 | **Detector deploy defaults** | `detect_boats.py`: **imgsz 1024, conf 0.25**, weights → in-repo `best.pt` (`finetune-diverse`, promoted 2026-07-26). imgsz 1280 is a non-win — use `--imgsz 1280 --augment` only for the opt-in big-ship profile |
@@ -663,7 +766,7 @@ commercial VHR/SAR per-alert tasking). Recorded as the north-star vision, not a 
 | Geofence AIS × MPA (P3) ✅ | `geofence_ais.py --ais <file>.json --wdpa-id <id> --vessels <fishing>.json` → `"reported"` events (+ `.geojson`) |
 | Alert digest (P3) ✅ | `alert_violations.py --run <run> --events <geofence>.json [--min-severity critical] [--out-markdown a.md] [--exit-code]` |
 | One-shot driver (P3) ✅ | `scan_violations.py --run <run> --ais <file>.json [--gfw --wdpa-id <id>]` (fuse → enrich → report) |
-| Test the P3 stages offline | `python -m unittest discover -s scripts/tests -p 'test_*.py'` (203 tests; synthetic, no network / key / ML deps) |
+| Test the P3 stages offline | `python -m unittest discover -s scripts/tests -p 'test_*.py'` (253 tests; synthetic, no network / key / ML deps — incl. 50 for the eval/gate harness) |
 | Violation schema | `docs/PIPELINE.md` → `violation_events.json` (pinned) |
 
 ## Key sources
