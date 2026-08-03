@@ -18,21 +18,35 @@ machine, not in repo)._
 
 | | Current state |
 |---|---|
-| **Optical detector** | `data/training/weights/best.pt` = **`finetune-diverse`** (promoted 2026-07-26). YOLOv8n-**P2** on Sentinel-2 10 m RGB. **Deploy: `imgsz 1024`, `conf 0.25`** — baked into `detect_boats.py` defaults. |
-| **SAR detector** | `data/training/weights/best_sar.pt` = **`sar-deep`** (promoted 2026-07-26). Thin first model (206 boxes / 1 region-family). **`sar-deep2` was NOT promoted** — it regressed the Gibraltar gate. |
+| **Optical detector** | `data/training/weights/best.pt` = **`finetune-adriatic`** (promoted 2026-08-02). YOLOv8n-**P2** on Sentinel-2 10 m RGB. **Deploy: `imgsz 1024`, `conf 0.20`** — baked into `detect_boats.py` defaults (verified in code 2026-08-03). ⚠️ conf moved **DOWN** 0.25→0.20 at this promotion; always re-sweep, never inherit. |
+| **SAR detector** | `data/training/weights/best_sar.pt` = **`sar-deep`** (promoted 2026-07-26). Thin first model (206 boxes / 1 region-family). **`sar-deep2` was NOT promoted** — it regressed the Gibraltar gate. ⚠️ **W5 (2026-08-03) showed it has no usable operating point**: its recorded P 0.392 / R 0.478 is the **conf ≈0.10** point (24.9 dets/chip on the in-sample Fujairah probe); F1 peaks at 0.415, recall CI [0.27, 0.67]. |
 | **Phase 3 (AIS fusion)** | **All stages built, offline-tested, AND live-validated** (2026-07-26). Definition of done **met**. |
 | **Offline test suite** | **253 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
+| **Eval / gating harness** | `eval_holdout.py` + `conf_sweep.py`, **modality-agnostic since W5** (`--train-dir`, default optical). Gates both trees; `PROMOTED_BY_TREE` stops an optical checkpoint leaking into a SAR gate. |
 | **Code health** | All `docs/AUDIT.md` P1/P2 findings closed. The P3 items are conscious house-style deferrals, not debt. |
 
-**Four holdout scenes anchor every optical gate.** These are the numbers a candidate model must beat
-(all at `imgsz 1024 / conf 0.25`, from the `finetune-diverse` promotion eval, 2026-07-26):
+**Four holdout scenes anchor every optical gate.** These are the numbers a candidate model must beat —
+the **live `finetune-adriatic` at `imgsz 1024 / conf 0.20`** (its 2026-08-02 promotion eval; Kornati
+re-verified 2026-08-03 by the W5 harness):
 
 | Holdout | Type | Boxes | P | R | Note |
 |---|---|---|---|---|---|
-| **Kornati** (Adriatic) | cross-region small-vessel | 156 | 0.57 | **0.51** | ⬅ **the weakest link — open gap #1** |
-| Alonnisos (Aegean) | cross-type small-vessel | 76 | — | 0.80 | relabeled 2026-07-16 → honest baseline |
-| Port Said | big-ship dense anchorage | 42 | — | 0.79 | `--imgsz 1280 --augment` profile reaches 0.81 |
-| Singapore Jul-5 | cross-date | 26 | — | 0.77 | the original gate |
+| **Kornati** (Adriatic) | cross-region small-vessel | 156 | 0.558 | **0.590** | CI [0.50, 0.68]. Weakest link, but **GSD-capped, not data-capped** — W1 refuted the data premise |
+| Alonnisos (Aegean) | cross-type small-vessel | 76 | — | 0.855 | relabeled 2026-07-16 → honest baseline |
+| Port Said | big-ship dense anchorage | 42 | — | 0.786 | `--imgsz 1280 --augment` profile reaches 0.81 |
+| Singapore Jul-5 | cross-date | 26 | — | 0.731 | the original gate; **regressed** 0.769→0.731 at the W1 promotion |
+
+Supporting figures at the same point: open-water FP probe **0.79 dets/chip**, base mAP50 **0.640**,
+base recall 0.590. ⚠️ **Gate on all four** — `eval_holdout.py --holdout` takes ONE scene and defaults to
+`fallbacktest` (Singapore), so a bare invocation silently reports 1/4 of the evidence (STATUS #9).
+
+**The SAR gate** (`--train-dir data/training_sar --holdout s1deep-gibraltar`, 35 chips / 23 boxes),
+`best_sar.pt` @ imgsz 1024 — read it beside the caveats in the SAR row above:
+
+| conf | P | R | F1 | FP/chip | Fujairah probe (in-TRAIN, directional) |
+|---|---|---|---|---|---|
+| 0.10 | 0.367 | 0.478 | **0.415** ⬅ peak | 0.54 | 24.9 dets/chip |
+| 0.25 | 0.714 | 0.217 | 0.333 | 0.06 | 13.3 dets/chip |
 
 ### The story so far — why the levers are what they are
 
@@ -75,17 +89,22 @@ the **traps**._
 **Legend:** 🏠 = needs the user's machine (GPU / human review / credentials) · 🟢 = buildable in any
 sandbox, no credentials · ⛔ = blocked on an external party.
 
-**Status in one line: the buildable backlog is nearly empty.** All AUDIT P1/P2 findings are closed,
-Phase 3's definition of done is met, and the three offline product stages (`ais_fishing.py`,
-`geofence_ais.py`, `alert_violations.py`) landed 2026-07-29. What remains is mostly **data work** that
-needs a GPU and a human labelling chips — the loop is proven, it just has to be turned.
+**Status in one line: the buildable backlog is empty except W8.** All AUDIT P1/P2 findings are closed,
+Phase 3's definition of done is met, the three offline product stages (`ais_fishing.py`,
+`geofence_ais.py`, `alert_violations.py`) landed 2026-07-29, and **W5 closed 2026-08-03** — the last
+🟢 item bar W8, which is a deliberate design decision rather than code. What remains is **data work**
+that needs a GPU and a human labelling chips — the loop is proven, it just has to be turned.
+
+**Start with W2.** W1 is done and refuted its own premise (optical data no longer lifts Kornati
+recall), W5 is done and cleared W2's blocker, and W4 was downgraded by W1's precision side-effect. The
+two items that still move the product are **W2 (SAR)** and **W3 (live AIS loop)** — both structural.
 
 | # | Item | Attacks | Effort | Blocker |
 |---|---|---|---|---|
 | ~~**W1**~~ | ~~Adriatic optical scenes → retrain → re-gate~~ | recall (Kornati gap) | — | ✅ **RUN 2026-08-02 — see "W1 outcome" below. Bought precision, NOT recall.** |
-| **W2** | SAR region diversity **or** xView3 transfer | SAR generalization | M–L | 🏠 review + GPU (xView3 also gated download) |
+| **W2** ⬅ **start here** | SAR region diversity **or** xView3 transfer | SAR generalization | M–L | 🏠 review + GPU (xView3 also gated download). **Unblocked — W5 shipped the gate** |
 | **W3** | Live operational loop over a trafficked MPA | product proof | S–M | 🏠 `AISSTREAM_API_KEY` |
-| **W4** | O3 same-region hard negatives | precision | M | 🏠 — **and do W1 first** |
+| **W4** | O3 same-region hard negatives | precision | M | 🏠 — **downgraded**: W1 already delivered a ~45% open-water FP cut |
 | ~~**W5**~~ | ~~`eval_holdout.py --train-dir` (SAR gating harness)~~ | trust / unblocks W2 | — | ✅ **DONE 2026-08-03 — see "W5 outcome" below. W2's blocker is cleared, and the SAR gate turned out weaker than recorded.** |
 | **W6** | S6 speckle-filter A/B | SAR precision/recall | S | 🏠 GPU |
 | **W7** | S7 cross-modality S1×S2 check | trust | S–M | 🏠 paired scenes |
@@ -702,9 +721,17 @@ so a future session can see what was already tried and does not redo it._
   provenance bug the old hardcoded label would have introduced). Thin evidence yields `null`, not `0.0`;
   AIS gaps are excluded from both numerator and denominator. 19 offline tests. Coarse by design — a
   prior to rank on, not proof of fishing.
+- ✅ **DONE (2026-08-03)** — **the SAR gating harness (W5)**: `eval_holdout.py` + `conf_sweep.py` take
+  `--train-dir`, so the same tiny-object gate (center-distance P/R, FP/chip, size strata, bootstrap CI)
+  now covers `data/training_sar`. `PROMOTED_BY_TREE` binds each tree to its checkpoint so an optical
+  model cannot silently gate SAR; zero-match holdouts and zero-chip FP probes became hard errors /
+  warnings instead of silent zeros; a missing explicit `--old`/`--new` no longer degrades to comparing
+  a model against itself. `ultralytics` moved into `load_yolo()` so both are importable stdlib-only →
+  **50 offline tests** (suite 203→253) over the logic that decides promotions. Optical numbers
+  re-verified unchanged; the SAR findings are in "W5 outcome" above.
 - **Still open, now tracked in THE WORK QUEUE above:** cross-modality S1×S2 (**W7** / `IMPROVEMENT_PLAN.md`
   S7), Skylight cross-check (**W9** / `PHASE3_PLAN.md` 3B), the detector-accuracy levers **O3** →
-  **W4** and **O4** → **W1**, the SAR gating harness (**W5**), and websocket reconnect (**W8**).
+  **W4** and **O4** → **W1**, and websocket reconnect (**W8**).
   (**O5** inference/tiling tuning and **O6** eval-harness hardening were **measured/exercised
   2026-07-25** and are closed — imgsz 1024 is confirmed and 1280 is a non-win; see "Do not re-attempt".)
 

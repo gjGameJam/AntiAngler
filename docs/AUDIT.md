@@ -24,6 +24,14 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
    at module level). `gfw_fetch.py` additionally soft-imports `dotenv` and lazy-imports `requests` in
    `main()`, so `import gfw_fetch` is stdlib-only and its pure helpers are now offline-tested
    (`test_gfw_fetch.py`).
+   **Extended to the eval scripts (2026-08-03, ROADMAP W5):** `eval_holdout.py` and `conf_sweep.py` now
+   use `parse_args(argv=None)` / `main(argv=None)` under the same `raise SystemExit(main())` guard, and
+   `ultralytics` moved out of module scope into `load_yolo()`. Both are therefore importable
+   stdlib-only, and the promotion-gate logic (center-distance matching, size strata, bootstrap CI,
+   subset building, tree→checkpoint resolution) is covered by 50 offline tests in
+   `test_eval_holdout.py` — including an `__import__`-blocking guard test, mirroring `test_http.py`'s,
+   that fails if `ultralytics`/`torch` returns to a module top. **The house rule is now uniform: no
+   script does work or imports a heavy dep at import time.**
 
 2. **`prep_polygons.py` is fragile and off-house-style, and it writes the file everything else
    depends on** — ✅ **DONE (2026-07-25):**

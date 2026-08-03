@@ -33,8 +33,9 @@ precision*, which the fusion improves.
 | **AIS × MPA geofencing** (2026-07-29) | `geofence_ais.py` | `"reported"` events + `.geojson` | `test_geofence_ais.py` (26) |
 | **Alerting interface** (2026-07-29) | `alert_violations.py` | severity digest (console / markdown) | `test_alert_violations.py` (29) |
 
-**203 offline tests** across the whole suite (which also covers `gfw_fetch.py` and the shared
-`_http.py` retry policy), no network / key / ML deps. The `violation_events.json` schema is pinned in
+**203 offline tests** at the time of writing — the suite is now **253** (2026-08-03 added 50 for the
+eval/gating harness, ROADMAP W5), and also covers `gfw_fetch.py` and the shared `_http.py` retry
+policy. No network / key / ML deps. The `violation_events.json` schema is pinned in
 `docs/PIPELINE.md` (4B). The full chain:
 `sat_fetch → detect_boats → aisstream_fetch → fuse_violations → gfw_vessels → fuse_violations --vessels → report_violations`
 (or one `scan_violations.py` invocation).

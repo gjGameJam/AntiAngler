@@ -49,6 +49,24 @@ python scripts/build_dataset.py
 python scripts/train.py --weights best      # fine-tune (active learning)
 python scripts/train.py --weights scratch   # train a fresh model
 
+# Step 9b: GATE the candidate before promoting it. Both scripts are modality-agnostic via
+# --train-dir (default data/training = optical; data/training_sar = SAR), and --old/--new/--weights
+# default to that tree's promoted checkpoint via eval_holdout.PROMOTED_BY_TREE.
+# Pick the operating point FIRST — deploy conf is not monotonic across retrains, and it has moved
+# both up and down. Sweep BOTH models; comparing a new model at the old conf measures the threshold.
+python scripts/conf_sweep.py --weights data/training/runs/<run>/weights/best.pt --imgsz 1024
+# Then gate at the swept conf. --holdout takes ONE scene and defaults to 'fallbacktest', so LOOP it
+# or you silently gate on 1/4 of the evidence:
+for H in kornati-adriatic alonnisos portsaid fallbacktest; do
+  python scripts/eval_holdout.py --old data/training/weights/best.pt --old-imgsz 1024 \
+      --new data/training/runs/<run>/weights/best.pt --new-imgsz 1024 --holdout "$H" --conf <swept>
+done
+# SAR: same two commands, pointed at the SAR tree (weights default to best_sar.pt, never best.pt)
+python scripts/conf_sweep.py  --train-dir data/training_sar --holdout s1deep-gibraltar \
+    --fp-scene  s1deep-fujairah --imgsz 1024
+python scripts/eval_holdout.py --train-dir data/training_sar --holdout s1deep-gibraltar \
+    --fp-scenes s1deep-fujairah --imgsz 1024 --conf <swept>
+
 # Step 10a (P3 ingest): stream live AIS from AISStream.io over a bbox/MPA and normalize it into
 # the AIS contract file the matcher reads (needs AISSTREAM_API_KEY; --dry-run needs neither key nor net)
 python scripts/aisstream_fetch.py --bbox <minLon> <minLat> <maxLon> <maxLat> --duration 120
