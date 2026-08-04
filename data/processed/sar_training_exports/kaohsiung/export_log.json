@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "generated_utc": "2026-08-04T03:21:33Z",
+      "source_run": "2026-07-17T19-57-41Z_s1warm-kaohsiung",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 49,
+      "positive_chips": 11,
+      "negative_chips": 38,
+      "total_boxes": 47
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "generated_utc": "2026-08-04T03:21:35Z",
+      "source_run": "2026-07-17T19-54-59Z_s1warm-suezgulf",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 36,
+      "positive_chips": 10,
+      "negative_chips": 26,
+      "total_boxes": 14
+    }
+  ]
+}

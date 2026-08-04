@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "generated_utc": "2026-08-04T03:21:30Z",
+      "source_run": "2026-07-17T19-56-10Z_s1warm-santos",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 49,
+      "positive_chips": 21,
+      "negative_chips": 28,
+      "total_boxes": 99
+    }
+  ]
+}
