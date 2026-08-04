@@ -94,6 +94,16 @@ def parse_args(argv=None):
     p.add_argument("--recv-timeout", type=float, default=float(env_or("AIS_RECV_TIMEOUT", 5.0)),
                    help="Per-receive socket timeout (s). Bounds how long a quiet feed blocks before "
                         "the deadline is re-checked. Default 5.")
+    p.add_argument("--no-reconnect", action="store_true",
+                   default=env_or("AIS_NO_RECONNECT", "").lower() in ("1", "true", "yes"),
+                   help="Stop at the first dropped connection instead of reconnecting. Default is to "
+                        "reconnect until --duration elapses; --duration is WALL-CLOCK either way, so "
+                        "an outage shortens the data collected rather than extending the capture.")
+    p.add_argument("--reconnect-backoff", type=float, default=float(env_or("AIS_RECONNECT_BACKOFF", 2.0)),
+                   help="Base seconds for reconnect backoff (0s on the first retry, then 2s/4s/8s... "
+                        "capped by --max-backoff). Default 2.")
+    p.add_argument("--max-backoff", type=float, default=float(env_or("AIS_MAX_BACKOFF", 30.0)),
+                   help="Cap on the reconnect backoff delay (s). Default 30.")
     p.add_argument("--dry-run", action="store_true",
                    help="Resolve the bbox + build the subscription and print them, but do NOT connect "
                         "or write. Offline sanity check for the AOI/key wiring.")
@@ -283,55 +293,196 @@ def apply_dedup(records, mode):
     return list(latest.values())
 
 
-def collect(subscribe_msg, duration_s, max_messages, recv_timeout):
-    """Thin websocket shell: connect, subscribe, and collect normalized position records until
-    the deadline / max_messages / Ctrl-C. Returns (records, stats). Lazy-imports websocket-client
-    so the module (and its offline tests) import without the dependency installed."""
+def reconnect_delay(consecutive_failures, backoff_s, max_backoff_s):
+    """0s on the first retry, then exponential backoff capped at max_backoff_s.
+
+    Mirrors scripts/_http.py's 0s/2s/4s shape so a websocket outage is not hammered any harder
+    than an HTTP one. Pure function so the schedule is testable without sleeping."""
+    if consecutive_failures <= 1:
+        return 0.0
+    return min(backoff_s * (2 ** (consecutive_failures - 2)), max_backoff_s)
+
+
+def collect(subscribe_msg, duration_s, max_messages, recv_timeout,
+            reconnect=True, backoff_s=2.0, max_backoff_s=30.0, stability_s=30.0, sleep=None):
+    """Websocket shell: connect, subscribe, and collect normalized position records until the
+    deadline / max_messages / Ctrl-C, reconnecting across dropped connections.
+
+    Capture semantics (decided 2026-08-03, ROADMAP W8):
+      * `--duration` is **wall-clock**: the deadline is fixed at entry, so a reconnect gap eats
+        into the window rather than extending it. A capture therefore still ends when the caller
+        expects, which is what makes it safe to pair against a known satellite overpass time.
+      * Outages are **recorded, not hidden**: the returned stats carry `connected_s`, a `gaps`
+        list and a `reconnects` count, so a consumer can see the capture is holey and where.
+        This is the same honesty property `ais_fishing.py` applies to AIS gaps (unobserved time
+        is excluded rather than assumed idle).
+      * Exact duplicates are dropped on the `(mmsi, timestamp)` key, since a reconnect can in
+        principle re-deliver a ping. This is distinct from `--dedup latest`, which is about
+        keeping one ping per vessel and is applied later in `apply_dedup`.
+      * The backoff resets only after a session that stayed up for `stability_s`, so a flapping
+        endpoint (one frame, then drop, repeatedly) escalates the delay instead of being
+        reconnected at 0s forever.
+
+    An AISStream `error` frame (bad key / bad bbox) still fails fast and is never retried.
+    Returns (records, stats). Lazy-imports websocket-client so the module (and its offline
+    tests) import without the dependency installed."""
     try:
         import websocket  # websocket-client; see requirements-ais.txt
     except ImportError as exc:
         raise RuntimeError("websocket-client is not installed. Install the AIS deps: "
                            "pip install -r requirements-ais.txt") from exc
 
+    sleep = sleep or time.sleep
     records = []
-    seen_frames = skipped = errors = 0
-    deadline = time.monotonic() + duration_s
-    ws = websocket.create_connection(AISSTREAM_URL, timeout=recv_timeout)
-    try:
-        ws.send(json.dumps(subscribe_msg))   # AISStream requires the sub within 3 s of connect
-        while time.monotonic() < deadline:
-            if max_messages and len(records) >= max_messages:
-                break
-            try:
-                raw = ws.recv()
-            except websocket.WebSocketTimeoutException:
-                continue   # quiet feed; loop back and re-check the deadline
-            except websocket.WebSocketConnectionClosedException:
-                print("  AIS: websocket closed by server; stopping early")
-                break
-            if not raw:
-                continue
-            seen_frames += 1
-            try:
-                msg = json.loads(raw)
-            except (ValueError, TypeError):
-                errors += 1
-                continue
-            if isinstance(msg, dict) and msg.get("error"):
-                raise RuntimeError(f"AISStream error: {msg['error']}")   # bad key / bbox -> fail fast
-            rec = normalize_aisstream_message(msg)
-            if rec is None:
-                skipped += 1
-            else:
-                records.append(rec)
-    except KeyboardInterrupt:
-        print("\n  AIS: interrupted; writing what was collected")
-    finally:
+    seen_keys = set()
+    seen_frames = skipped = errors = duplicates = reconnects = 0
+    gaps = []
+    connected_s = 0.0
+    consecutive_failures = 0
+    interrupted = False
+
+    started_monotonic = time.monotonic()
+    deadline = started_monotonic + duration_s
+    disconnected_at = None          # (monotonic, utc) of the last drop, for gap accounting
+
+    def _utc():
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    while time.monotonic() < deadline:
+        if max_messages and len(records) >= max_messages:
+            break
+
+        # ---- (re)connect ------------------------------------------------------------------
+        ws = None
         try:
-            ws.close()
-        except Exception:
-            pass
-    return records, {"frames": seen_frames, "skipped": skipped, "errors": errors}
+            ws = websocket.create_connection(AISSTREAM_URL, timeout=recv_timeout)
+            ws.send(json.dumps(subscribe_msg))   # AISStream requires the sub within 3 s of connect
+        except KeyboardInterrupt:
+            interrupted = True
+            break
+        except Exception as exc:                 # connect/handshake failure -> treat as an outage
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            if not reconnect:
+                raise
+            consecutive_failures += 1
+            if disconnected_at is None:
+                disconnected_at = (time.monotonic(), _utc())
+            delay = reconnect_delay(consecutive_failures, backoff_s, max_backoff_s)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            print(f"  AIS: connect failed ({type(exc).__name__}); retrying in {delay:.0f}s")
+            try:
+                sleep(min(delay, remaining))
+            except KeyboardInterrupt:
+                interrupted = True
+                break
+            continue
+
+        # a connection was established -> close any open gap
+        if disconnected_at is not None:
+            gap_monotonic, gap_from = disconnected_at
+            gaps.append({"from": gap_from, "to": _utc(),
+                         "seconds": round(time.monotonic() - gap_monotonic, 1)})
+            disconnected_at = None
+            reconnects += 1
+        session_start = time.monotonic()
+
+        # ---- receive until this session dies or the deadline passes -----------------------
+        try:
+            while time.monotonic() < deadline:
+                if max_messages and len(records) >= max_messages:
+                    break
+                try:
+                    raw = ws.recv()
+                except websocket.WebSocketTimeoutException:
+                    continue   # quiet feed; loop back and re-check the deadline
+                except websocket.WebSocketConnectionClosedException:
+                    break
+                if not raw:
+                    continue
+                seen_frames += 1
+                try:
+                    msg = json.loads(raw)
+                except (ValueError, TypeError):
+                    errors += 1
+                    continue
+                if isinstance(msg, dict) and msg.get("error"):
+                    # bad key / bbox -> fail fast, never retry
+                    raise RuntimeError(f"AISStream error: {msg['error']}")
+                rec = normalize_aisstream_message(msg)
+                if rec is None:
+                    skipped += 1
+                    continue
+                key = (rec["mmsi"], rec["timestamp"])
+                if key in seen_keys:
+                    duplicates += 1
+                    continue
+                seen_keys.add(key)
+                records.append(rec)
+        except KeyboardInterrupt:
+            interrupted = True
+        finally:
+            connected_s += time.monotonic() - session_start
+            try:
+                ws.close()
+            except Exception:
+                pass
+
+        if interrupted:
+            print("\n  AIS: interrupted; writing what was collected")
+            break
+        if max_messages and len(records) >= max_messages:
+            break
+        if time.monotonic() >= deadline:
+            break
+        if not reconnect:
+            print("  AIS: websocket closed by server; stopping early")
+            break
+
+        # Session ended before the deadline -> open a gap and go round again.
+        # Reset the backoff only if the session was STABLE, not merely because it delivered a
+        # frame: a flapping endpoint that serves one frame and drops would otherwise reset the
+        # counter every cycle and be reconnected at 0s delay forever.
+        if time.monotonic() - session_start >= stability_s:
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+        disconnected_at = (time.monotonic(), _utc())
+        delay = reconnect_delay(consecutive_failures, backoff_s, max_backoff_s)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        print(f"  AIS: connection dropped; reconnecting in {delay:.0f}s "
+              f"({remaining / 60:.1f} min left in the window)")
+        try:
+            sleep(min(delay, remaining))
+        except KeyboardInterrupt:
+            interrupted = True
+            break
+
+    # a capture that ended mid-outage still owes the record a closed gap
+    if disconnected_at is not None:
+        gap_monotonic, gap_from = disconnected_at
+        gaps.append({"from": gap_from, "to": _utc(),
+                     "seconds": round(time.monotonic() - gap_monotonic, 1)})
+
+    elapsed_s = time.monotonic() - started_monotonic
+    return records, {
+        "frames": seen_frames,
+        "skipped": skipped,
+        "errors": errors,
+        "duplicates": duplicates,
+        "reconnects": reconnects,
+        "gaps": gaps,
+        "connected_s": round(connected_s, 1),
+        "elapsed_s": round(elapsed_s, 1),
+        "interrupted": interrupted,
+    }
 
 
 def main(argv=None):
@@ -359,11 +510,24 @@ def main(argv=None):
 
     start = datetime.now(timezone.utc)
     print(f"  connecting {AISSTREAM_URL} at {start.strftime('%Y-%m-%dT%H:%M:%SZ')} ...")
-    records, stats = collect(subscribe_msg, args.duration, args.max_messages, args.recv_timeout)
+    records, stats = collect(subscribe_msg, args.duration, args.max_messages, args.recv_timeout,
+                             reconnect=not args.no_reconnect,
+                             backoff_s=args.reconnect_backoff, max_backoff_s=args.max_backoff)
     kept = apply_dedup(records, args.dedup)
     unique_mmsi = len({r["mmsi"] for r in kept})
     print(f"  frames={stats['frames']}  positions={len(records)}  "
-          f"kept={len(kept)} ({unique_mmsi} vessels)  skipped={stats['skipped']}  errors={stats['errors']}")
+          f"kept={len(kept)} ({unique_mmsi} vessels)  skipped={stats['skipped']}  errors={stats['errors']}"
+          + (f"  duplicates={stats['duplicates']}" if stats["duplicates"] else ""))
+    # Say plainly when the window was not fully covered - a holey capture that looks complete is
+    # the failure mode this reporting exists to prevent (ROADMAP W8).
+    if stats["reconnects"] or stats["gaps"]:
+        lost = sum(g["seconds"] for g in stats["gaps"])
+        print(f"  connection: {stats['reconnects']} reconnect(s), {len(stats['gaps'])} gap(s), "
+              f"{lost:.0f}s disconnected -> connected {stats['connected_s']:.0f}s "
+              f"of {stats['elapsed_s']:.0f}s elapsed")
+    if stats["interrupted"]:
+        print(f"  NOTE: capture ended early ({stats['elapsed_s']:.0f}s of the requested "
+              f"{args.duration:.0f}s) - the record below says so.")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
@@ -374,9 +538,19 @@ def main(argv=None):
         "bbox_wgs84": [round(v, 7) for v in bbox],
         "wdpa": wdpa_meta,
         "collected_from_utc": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "duration_s": args.duration,
+        "duration_s": args.duration,              # REQUESTED window (wall-clock)
+        # --- what actually happened (ROADMAP W8) ---------------------------------------------
+        # duration_s alone used to be written unconditionally, so a capture truncated by a dropped
+        # socket or Ctrl-C still claimed the full window. These fields make a holey capture legible:
+        # a consumer can check whether the moment it cares about (e.g. scene.datetime) was covered.
+        "elapsed_s": stats["elapsed_s"],          # wall-clock actually spent
+        "connected_s": stats["connected_s"],      # of which genuinely connected
+        "reconnects": stats["reconnects"],
+        "gaps": stats["gaps"],                    # [{from, to, seconds}] - unobserved intervals
+        "truncated": bool(stats["interrupted"]),  # Ctrl-C / early stop
         "message_types": args.message_types,
         "dedup": args.dedup,
+        "duplicates_dropped": stats["duplicates"],
         "frames_seen": stats["frames"],
         "position_count": len(kept),
         "unique_mmsi": unique_mmsi,

@@ -207,11 +207,15 @@ class TestCollectLoop(unittest.TestCase):
     """Exercise the websocket shell offline by injecting a stub 'websocket' module (it is
     lazy-imported inside collect())."""
 
-    def _run_with_frames(self, frames):
+    def _run_with_frames(self, frames, **kw):
+        """Single-session behaviour: reconnect off, so 'server closed' ends the capture.
+        The reconnecting path is covered by TestReconnect below."""
         fake = _FakeWebsocketModule(frames)
         sys.modules["websocket"] = fake
+        kw.setdefault("reconnect", False)
         try:
-            return ais.collect({"APIKey": "x"}, duration_s=30, max_messages=0, recv_timeout=0.01), fake
+            return ais.collect({"APIKey": "x"}, duration_s=30, max_messages=0, recv_timeout=0.01,
+                               **kw), fake
         finally:
             sys.modules.pop("websocket", None)
 
@@ -252,6 +256,150 @@ class TestCollectLoop(unittest.TestCase):
             self.assertIn("requirements-ais.txt", str(ctx.exception))
         finally:
             builtins.__import__ = real_import
+
+
+class _FakeSeqWebsocketModule:
+    """Serves a DIFFERENT frame list per connection, so a reconnect is observable offline.
+    Optionally raises a queued exception from create_connection to simulate a failed handshake."""
+    WebSocketTimeoutException = _FakeTimeout
+    WebSocketConnectionClosedException = _FakeClosed
+
+    def __init__(self, sessions, connect_errors=()):
+        self._sessions = list(sessions)
+        self._connect_errors = list(connect_errors)
+        self.connections = 0
+
+    def create_connection(self, url, timeout=None):
+        self.connections += 1
+        if self._connect_errors:
+            err = self._connect_errors.pop(0)
+            if err is not None:
+                raise err
+        frames = self._sessions.pop(0) if self._sessions else []
+        return _FakeWS(frames)
+
+
+class TestReconnect(unittest.TestCase):
+    """ROADMAP W8 capture semantics: --duration is wall-clock, outages are recorded not hidden,
+    and an exact (mmsi, timestamp) ping is never counted twice across a reconnect."""
+
+    def _collect(self, sessions, connect_errors=(), **kw):
+        fake = _FakeSeqWebsocketModule(sessions, connect_errors)
+        sys.modules["websocket"] = fake
+        kw.setdefault("duration_s", 10)
+        kw.setdefault("max_messages", 0)
+        kw.setdefault("recv_timeout", 0.01)
+        kw.setdefault("sleep", lambda _s: None)   # never actually sleep in tests
+        try:
+            return ais.collect({"APIKey": "x"}, **kw), fake
+        finally:
+            sys.modules.pop("websocket", None)
+
+    def test_reconnects_after_drop_and_records_the_gap(self):
+        (records, stats), fake = self._collect(
+            [[json.dumps(sample_message(mmsi=111))],
+             [json.dumps(sample_message(mmsi=222, time_utc="2026-07-14 10:00:05 +0000 UTC"))]],
+            max_messages=2)
+        self.assertEqual([r["mmsi"] for r in records], ["111", "222"])
+        self.assertEqual(fake.connections, 2)
+        self.assertEqual(stats["reconnects"], 1)
+        self.assertEqual(len(stats["gaps"]), 1)
+        gap = stats["gaps"][0]
+        self.assertLessEqual({"from", "to", "seconds"}, set(gap))   # the gap is legible downstream
+
+    def test_duplicate_ping_dropped_across_reconnect(self):
+        dup = json.dumps(sample_message(mmsi=111))          # identical mmsi AND timestamp
+        (records, stats), _ = self._collect(
+            [[dup],
+             [dup, json.dumps(sample_message(mmsi=222, time_utc="2026-07-14 10:00:05 +0000 UTC"))]],
+            max_messages=2)
+        self.assertEqual([r["mmsi"] for r in records], ["111", "222"])
+        self.assertEqual(stats["duplicates"], 1)            # the replayed ping did not double-count
+
+    def test_error_frame_is_never_retried(self):
+        """A bad key/bbox must fail fast - reconnecting would just hammer the endpoint."""
+        fake = _FakeSeqWebsocketModule([[json.dumps({"error": "Invalid API Key"})]])
+        sys.modules["websocket"] = fake
+        try:
+            with self.assertRaises(RuntimeError):
+                ais.collect({"APIKey": "x"}, duration_s=10, max_messages=0, recv_timeout=0.01,
+                            reconnect=True, sleep=lambda _s: None)
+        finally:
+            sys.modules.pop("websocket", None)
+        self.assertEqual(fake.connections, 1)               # did not reconnect
+
+    def test_failed_handshake_is_retried(self):
+        (records, stats), fake = self._collect(
+            [[json.dumps(sample_message(mmsi=111))]],
+            connect_errors=[OSError("connection refused"), None],
+            max_messages=1)
+        self.assertEqual(fake.connections, 2)
+        self.assertEqual([r["mmsi"] for r in records], ["111"])
+        self.assertEqual(len(stats["gaps"]), 1)
+
+    def test_no_reconnect_stops_at_first_drop(self):
+        (records, stats), fake = self._collect(
+            [[json.dumps(sample_message(mmsi=111))], [json.dumps(sample_message(mmsi=222))]],
+            reconnect=False)
+        self.assertEqual([r["mmsi"] for r in records], ["111"])
+        self.assertEqual(fake.connections, 1)
+        self.assertEqual(stats["reconnects"], 0)
+
+    def test_flapping_endpoint_escalates_backoff(self):
+        """A connection that serves one frame then drops must NOT reset the backoff.
+
+        Resetting on 'received a frame' would reconnect a flapping endpoint at 0s forever -
+        precisely the hammering the backoff exists to prevent. stability_s is set high here so
+        no session counts as stable."""
+        slept = []
+        sessions = [[json.dumps(sample_message(
+            mmsi=100 + i, time_utc=f"2026-07-14 10:00:{i:02d} +0000 UTC"))] for i in range(5)]
+        fake = _FakeSeqWebsocketModule(sessions)
+        sys.modules["websocket"] = fake
+        try:
+            ais.collect({"APIKey": "x"}, duration_s=10, max_messages=4, recv_timeout=0.01,
+                        reconnect=True, backoff_s=2.0, max_backoff_s=30.0,
+                        stability_s=999.0, sleep=slept.append)
+        finally:
+            sys.modules.pop("websocket", None)
+        self.assertGreaterEqual(len(slept), 3)
+        self.assertEqual(slept[:3], [0.0, 2.0, 4.0])   # escalates rather than staying at 0
+
+    def test_stable_session_resets_backoff(self):
+        """The mirror case: a session that outlived stability_s starts the next retry at 0s."""
+        slept = []
+        sessions = [[json.dumps(sample_message(mmsi=100 + i,
+                                               time_utc=f"2026-07-14 10:00:{i:02d} +0000 UTC"))]
+                    for i in range(4)]
+        fake = _FakeSeqWebsocketModule(sessions)
+        sys.modules["websocket"] = fake
+        try:
+            ais.collect({"APIKey": "x"}, duration_s=10, max_messages=3, recv_timeout=0.01,
+                        reconnect=True, backoff_s=2.0, max_backoff_s=30.0,
+                        stability_s=0.0, sleep=slept.append)   # every session counts as stable
+        finally:
+            sys.modules.pop("websocket", None)
+        self.assertTrue(slept)
+        self.assertEqual(set(slept), {0.0})            # never escalates while sessions are healthy
+
+    def test_stats_carry_connected_and_elapsed(self):
+        (_, stats), _ = self._collect([[json.dumps(sample_message(mmsi=111))]], max_messages=1)
+        for key in ("connected_s", "elapsed_s", "reconnects", "gaps", "duplicates", "interrupted"):
+            self.assertIn(key, stats)
+        self.assertGreaterEqual(stats["elapsed_s"], stats["connected_s"])   # gaps are not connected
+
+
+class TestReconnectDelay(unittest.TestCase):
+    """The backoff schedule mirrors scripts/_http.py's 0s/2s/4s shape, capped."""
+
+    def test_schedule(self):
+        self.assertEqual(ais.reconnect_delay(1, 2.0, 30.0), 0.0)   # first retry is immediate
+        self.assertEqual(ais.reconnect_delay(2, 2.0, 30.0), 2.0)
+        self.assertEqual(ais.reconnect_delay(3, 2.0, 30.0), 4.0)
+        self.assertEqual(ais.reconnect_delay(4, 2.0, 30.0), 8.0)
+
+    def test_capped(self):
+        self.assertEqual(ais.reconnect_delay(99, 2.0, 30.0), 30.0)
 
 
 class TestEndToEndIntoMatcher(unittest.TestCase):
