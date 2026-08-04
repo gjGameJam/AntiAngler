@@ -237,3 +237,10 @@ data/raw/sentinel1/
 
 # Human-labeled training exports produced by scripts/export_labels.py (planned)
 data/processed/training_exports/
+
+# Despeckled SAR training trees (ROADMAP W6). These are DERIVED from data/training_sar/ and are
+# fully reproducible with scripts/sar_despeckle.py, so they are not worth ~334 committed PNGs.
+# (data/training_sar/ itself IS tracked — it is source data, these are not.)
+data/training_sar_lee/
+data/training_sar_leeref/
+data/training_sar_peak/
