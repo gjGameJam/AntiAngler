@@ -6,9 +6,10 @@ _Snapshot: **2026-08-01**. The plan for finishing Phase 3 (the AIS dark-vessel r
 > ## ✅ PHASE 3 IS COMPLETE — every box in "Definition of done" is ticked
 > Built + offline-tested 2026-07-23, **live-validated 2026-07-26** (AISStream, GFW v3, and a first
 > real violation over Anacapa Island SMR), extended 2026-07-29 with three more offline stages.
-> **This file is now mostly a record.** The only things still open are the *optional* Skylight
-> cross-check (3B) and the near-real-time operational mode — both tracked as **W9** and **W3** in
-> `docs/ROADMAP.md` → THE WORK QUEUE, which is where forward-looking work now lives.
+> **This file is now mostly a record.** The only thing still open is the near-real-time operational
+> mode, tracked as **W3** in `docs/ROADMAP.md` → THE WORK QUEUE, which is where forward-looking work
+> now lives. The optional Skylight cross-check (3B) was **dropped from the queue 2026-08-03** — it is
+> recorded below as an idea, not a tracked work item.
 
 ## The product in one line
 
@@ -186,7 +187,7 @@ with no special-casing:
   MPA* scores up. Add a test with region-filtered synthetic events.
 - **Effort:** S–M.
 
-### 3B. Skylight dark-call cross-check — `scripts/skylight_fetch.py`  ☐
+### 3B. Skylight dark-call cross-check — `scripts/skylight_fetch.py`  ☐ *(not queued — dropped from the ROADMAP work queue 2026-08-03; kept here as a recorded idea)*
 - **Do:** a sibling ingester that pulls Skylight (Ai2) free dark-vessel alerts for an AOI/time
   (https://skylight.global/platform) and normalizes them; then a small comparison that scores our dark
   calls against Skylight's for the same AOI/time (agreement / precision-recall).
@@ -241,7 +242,8 @@ with no special-casing:
 - [x] **The fishing signal works with no credentials** (`ais_fishing.py`, 2026-07-29).
 - [x] **Cooperative in-MPA vessels are flagged too** (`geofence_ais.py`, 2026-07-29) — the third status.
 
-**Optional / not required for done:** Skylight cross-check (3B → ROADMAP **W9**, gated on API access).
+**Optional / not required for done:** Skylight cross-check (3B) — gated on API access, **not tracked in
+the ROADMAP work queue** (removed 2026-08-03).
 
 ## What's left (moved to `docs/ROADMAP.md` → THE WORK QUEUE)
 
@@ -255,7 +257,9 @@ rather than here:
   round: reconnect-and-resume changes *capture semantics* (duplicate positions, partial windows), which
   is a design decision, not a transport setting. **W3 depends on deciding this** — a rolling buffer is
   exactly where a dropped connection costs you the acquisition.
-- **W9 — Skylight cross-check** (3B below), gated on external API access.
+
+The Skylight cross-check (3B above) is **no longer queued** — it was removed from the ROADMAP work
+queue on 2026-08-03 (gated on external API registration, and not a pipeline dependency).
 
 Everything above needed only free accounts (AISStream key, GFW token) already in scope; no paid
 services and no new heavy dependencies were introduced.

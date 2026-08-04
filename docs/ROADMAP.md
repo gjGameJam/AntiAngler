@@ -19,9 +19,9 @@ machine, not in repo)._
 | | Current state |
 |---|---|
 | **Optical detector** | `data/training/weights/best.pt` = **`finetune-adriatic`** (promoted 2026-08-02). YOLOv8n-**P2** on Sentinel-2 10 m RGB. **Deploy: `imgsz 1024`, `conf 0.20`** — baked into `detect_boats.py` defaults (verified in code 2026-08-03). ⚠️ conf moved **DOWN** 0.25→0.20 at this promotion; always re-sweep, never inherit. |
-| **SAR detector** | `data/training/weights/best_sar.pt` = **`sar-deep`** (promoted 2026-07-26). Thin first model (206 boxes / 1 region-family). **`sar-deep2` was NOT promoted** — it regressed the Gibraltar gate. ⚠️ **W5 (2026-08-03) showed it has no usable operating point**: its recorded P 0.392 / R 0.478 is the **conf ≈0.10** point (24.9 dets/chip on the in-sample Fujairah probe); F1 peaks at 0.415, recall CI [0.27, 0.67]. |
+| **SAR detector** | `data/training/weights/best_sar.pt` = **`sar-deep3`** (promoted **2026-08-04**, W2). **Deploy: `imgsz 1024`, `conf 0.10`** — the first swept SAR operating point. Trained on 5 region families (Fujairah/Hormuz/Singapore/Kaohsiung/Suez) with **Gibraltar + Santos held out**. Gibraltar P 0.545 / R 0.522, Santos P 0.316 / R 0.424 — the outgoing `sar-deep` scored **0/99 on Santos**. Backup: `best_sar_deep.pt`. Still noisy on fresh regions (1.86 FP/chip on Santos). |
 | **Phase 3 (AIS fusion)** | **All stages built, offline-tested, AND live-validated** (2026-07-26). Definition of done **met**. |
-| **Offline test suite** | **253 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
+| **Offline test suite** | **263 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
 | **Eval / gating harness** | `eval_holdout.py` + `conf_sweep.py`, **modality-agnostic since W5** (`--train-dir`, default optical). Gates both trees; `PROMOTED_BY_TREE` stops an optical checkpoint leaking into a SAR gate. |
 | **Code health** | All `docs/AUDIT.md` P1/P2 findings closed. The P3 items are conscious house-style deferrals, not debt. |
 
@@ -40,13 +40,17 @@ Supporting figures at the same point: open-water FP probe **0.79 dets/chip**, ba
 base recall 0.590. ⚠️ **Gate on all four** — `eval_holdout.py --holdout` takes ONE scene and defaults to
 `fallbacktest` (Singapore), so a bare invocation silently reports 1/4 of the evidence (STATUS #9).
 
-**The SAR gate** (`--train-dir data/training_sar --holdout s1deep-gibraltar`, 35 chips / 23 boxes),
-`best_sar.pt` @ imgsz 1024 — read it beside the caveats in the SAR row above:
+**The SAR gate is now TWO regions** (`--train-dir data/training_sar`, 84 chips / **122 boxes**:
+`s1deep-gibraltar` 23 + `s1warm-santos` 99). `best_sar.pt` = `sar-deep3` @ imgsz 1024, **conf 0.10**:
 
-| conf | P | R | F1 | FP/chip | Fujairah probe (in-TRAIN, directional) |
-|---|---|---|---|---|---|
-| 0.10 | 0.367 | 0.478 | **0.415** ⬅ peak | 0.54 | 24.9 dets/chip |
-| 0.25 | 0.714 | 0.217 | 0.333 | 0.06 | 13.3 dets/chip |
+| holdout | P | R | F1 | FP/chip | mAP50 | recall 90% CI |
+|---|---|---|---|---|---|---|
+| Gibraltar | 0.545 | 0.522 | **0.533** | 0.29 | 0.415 | [0.40, 0.65] |
+| Santos | 0.316 | 0.424 | 0.362 | 1.86 | 0.261 | [0.33, 0.51] |
+
+Both scenes peak at conf 0.10. Combined test-split mAP50 **0.277**, base recall **0.418**; open-water
+Fujairah probe (in-TRAIN, directional) **19.1 dets/chip**. ⚠️ **Loop `--holdout` over BOTH scenes** —
+it takes one at a time, and Gibraltar alone hid the incumbent's total blindness on Santos.
 
 ### The story so far — why the levers are what they are
 
@@ -87,29 +91,29 @@ down is reference only. Each item states **why**, the **exact commands**, the **
 the **traps**._
 
 **Legend:** 🏠 = needs the user's machine (GPU / human review / credentials) · 🟢 = buildable in any
-sandbox, no credentials · ⛔ = blocked on an external party.
+sandbox, no credentials.
 
-**Status in one line: the buildable backlog is empty except W8.** All AUDIT P1/P2 findings are closed,
+**Status in one line: the buildable backlog is now EMPTY.** All AUDIT P1/P2 findings are closed,
 Phase 3's definition of done is met, the three offline product stages (`ais_fishing.py`,
-`geofence_ais.py`, `alert_violations.py`) landed 2026-07-29, and **W5 closed 2026-08-03** — the last
-🟢 item bar W8, which is a deliberate design decision rather than code. What remains is **data work**
-that needs a GPU and a human labelling chips — the loop is proven, it just has to be turned.
+`geofence_ais.py`, `alert_violations.py`) landed 2026-07-29, **W5 closed 2026-08-03**, and **W7 + W8
+closed 2026-08-03**. What remains is **data work** that needs a GPU and a human labelling chips — the
+loop is proven, it just has to be turned.
 
 **Start with W2.** W1 is done and refuted its own premise (optical data no longer lifts Kornati
-recall), W5 is done and cleared W2's blocker, and W4 was downgraded by W1's precision side-effect. The
-two items that still move the product are **W2 (SAR)** and **W3 (live AIS loop)** — both structural.
+recall), W5 is done and cleared W2's blocker, W7 is done and found its own question unanswerable with
+free Sentinel data, W8 is done, and W4 was downgraded by W1's precision side-effect. The two items
+that still move the product are **W2 (SAR)** and **W3 (live AIS loop)** — both structural.
 
 | # | Item | Attacks | Effort | Blocker |
 |---|---|---|---|---|
 | ~~**W1**~~ | ~~Adriatic optical scenes → retrain → re-gate~~ | recall (Kornati gap) | — | ✅ **RUN 2026-08-02 — see "W1 outcome" below. Bought precision, NOT recall.** |
-| **W2** ⬅ **start here** | SAR region diversity **or** xView3 transfer | SAR generalization | M–L | 🏠 review + GPU (xView3 also gated download). **Unblocked — W5 shipped the gate** |
-| **W3** | Live operational loop over a trafficked MPA | product proof | S–M | 🏠 `AISSTREAM_API_KEY` |
+| ~~**W2**~~ | ~~SAR region diversity **or** xView3 transfer~~ | SAR generalization | — | ✅ **DONE 2026-08-04 — `sar-deep3` PROMOTED at conf 0.10. Gibraltar P 0.367→0.545, Santos 0.000→0.424 (CIs disjoint). See "W2 outcome".** |
+| **W3** ⬅ **path A done** | Live operational loop over a trafficked MPA | product proof | S–M | ✅ **Path A RAN LIVE 2026-08-03/04** — 17 reserves geofenced, 1 event, GFW-corroborated (see "W3 outcome"). **Path B (fusion vs a fresh overpass) still open** — needs an acquisition inside the capture window |
 | **W4** | O3 same-region hard negatives | precision | M | 🏠 — **downgraded**: W1 already delivered a ~45% open-water FP cut |
 | ~~**W5**~~ | ~~`eval_holdout.py --train-dir` (SAR gating harness)~~ | trust / unblocks W2 | — | ✅ **DONE 2026-08-03 — see "W5 outcome" below. W2's blocker is cleared, and the SAR gate turned out weaker than recorded.** |
-| **W6** | S6 speckle-filter A/B | SAR precision/recall | S | 🏠 GPU |
-| **W7** | S7 cross-modality S1×S2 check | trust | S–M | 🏠 paired scenes |
-| **W8** | Websocket reconnect for `aisstream_fetch.py` | W3 robustness | S | 🟢 — but decide semantics first |
-| **W9** | Skylight dark-call cross-check | external validation | M | ⛔ API registration |
+| ~~**W6**~~ | ~~S6 speckle-filter A/B~~ | SAR precision/recall | — | ✅ **RAN 2026-08-03/04 — see "W6 outcome". Peak-preserving despeckle: same recall, −63% false alarms, recall ceiling 0.70→0.87. Plain Lee is a trap (ceiling 0.70→0.39). Not promoted — fold into W2.** |
+| ~~**W7**~~ | ~~S7 cross-modality S1×S2 check~~ | trust | — | ✅ **RAN 2026-08-03 — see "W7 outcome" below. Not answerable as posed: S1/S2 orbits guarantee a ≥4.4 h gap. Georeferencing agreement WAS confirmed.** |
+| ~~**W8**~~ | ~~Websocket reconnect for `aisstream_fetch.py`~~ | W3 robustness | — | ✅ **DONE 2026-08-03 — wall-clock duration, gaps recorded, `(mmsi,timestamp)` dedup. Also fixed a truncated capture silently claiming the full window.** |
 
 ---
 
@@ -278,6 +282,94 @@ region in TEST would do more for the gate's power than any tuning.
 **Never warm-start SAR from the optical `best.pt`** — wrong texture priors. Use `--pretrained yolov8n`
 or a SAR-pretrained backbone.
 
+### W2 outcome ✅ **DONE 2026-08-04 — `sar-deep3` PROMOTED. The first unambiguous SAR win.**
+
+**Ran:** the 3 new regions were reviewed (134 chips, **160 vessel boxes + 92 hard-negative chips**),
+exported, and rebuilt with **Santos held out as a SECOND TEST region** alongside Gibraltar — the
+change W6/W7 argued for. Gate evidence went **23 boxes → 122** (Gibraltar 23 + Santos 99).
+
+Seed precision varied enormously by region, which is worth knowing before the next review session:
+**santos ~80%** (82 correct / 103 seeded), **kaohsiung ~28%**, **suezgulf ~10%**. `sar_seed.py` is
+tuned for Fujairah-like deep anchorages; in cluttered coastal water it mostly produces work.
+
+**The incumbent was not weak out-of-region — it was blind.** `best_sar.pt` (sar-deep) scored
+**0 of 99 on Santos at EVERY threshold, including conf 0.05**: zero detections, zero false positives.
+The per-scene dB stretch in `providers/s1.py` makes each new region a different pixel distribution,
+and the thin model simply had nothing to say. This is the same failure as the Singapore probe, now
+measured at the floor.
+
+**Gate at the joint F1 peak (conf 0.10 — both scenes peak there):**
+
+| | Gibraltar old → new | Santos old → new |
+|---|---|---|
+| P | 0.367 → **0.545** | 0.000 → **0.316** |
+| R | 0.478 → **0.522** | 0.000 → **0.424** |
+| FP/chip | 0.54 → **0.29** | 0.00 → 1.86 |
+| mAP50 | 0.335 → **0.415** | 0.044 → **0.261** |
+| recall 90% CI | [0.27, 0.67] → [0.40, 0.65] | **[0.00, 0.00] → [0.33, 0.51]** |
+
+Combined test split: **mAP50 0.072 → 0.277**, base recall **0.098 → 0.418**. Open-water probe
+**31.60 → 19.12** dets/chip (−40%).
+
+**Acceptance: MET on every clause** (Gibraltar P ≥ 0.39 ✓ 0.545, R ≥ 0.48 ✓ 0.522, mAP50 ≥ 0.335 ✓
+0.415; the new region scores non-zero ✓ emphatically). Unlike every previous SAR decision this one is
+**statistically decisive** rather than noise-band: the Santos recall CIs are *completely disjoint*.
+Gibraltar's still overlap, so the Gibraltar recall gain alone would not have been provable — which is
+exactly why the second TEST region mattered.
+
+**Promoted** `data/training/runs/sar-deep3/weights/best.pt` → `best_sar.pt` at **deploy conf 0.10**.
+Outgoing model backed up as **`best_sar_deep.pt`**; revert by copying it back.
+
+**What this does and does not fix.** `best_sar.pt` now has a **swept deploy conf and a usable
+operating point** for the first time (STATUS #10 was "no usable operating point") — F1 0.533 Gibraltar
+/ 0.362 Santos at conf 0.10, with precision up 49% and false alarms nearly halved on Gibraltar. It is
+**not** clean: Santos still runs **1.86 FP/chip** at the deploy point, so a fresh region remains noisy
+and review is still the quality gate. Next levers, now that the gate can actually resolve them: re-run
+the **W6 peak-preserving despeckle** A/B on this thicker gate, and add a third reviewed region.
+
+---
+
+### W2 prep ✅ **NO FETCHING NEEDED — 4 regions were already staged and review-ready (audited 2026-08-04)**
+
+Option A's fetch/seed/companion steps were **already run on 2026-07-17** and never handed off. Six
+`s1warm-*` SAR runs sit on disk, each with `water_mask.tif`, a populated `companion/` optical pane
+(1:1 with chips), and `sar_seed.py` detections. **None is in `data/training_sar/`.** The only missing
+step is human review.
+
+| run | chips | seed dets | chips w/ dets | max/chip | region family | verdict |
+|---|---|---|---|---|---|---|
+| `s1warm-santos` | 49 | 103 | 23 | 13 | Brazil / S. Atlantic | ⬅ **review first** — most distinct from anything in TRAIN |
+| `s1warm-kaohsiung` | 49 | 103 | 11 | 45 | Taiwan | ⬅ **second** — new family |
+| `s1warm-suezgulf` | 36 | 87 | 15 | 19 | Red Sea / Suez | ⬅ **third** — new family |
+| `s1warm-jebelali` | 56 | 163 | 18 | 50 | Gulf | ⏸ deprioritise — same family as Fujairah/Hormuz |
+| `s1warm-rastanura` | 40 | **0** | 0 | — | Gulf | ⛔ seed found nothing |
+| `s1warm-durban` | 28 | **1** | 1 | — | S. Africa | ⛔ seed found nothing |
+
+```bash
+python scripts/review_server.py --run data/raw/sentinel2/2026-07-17T19-56-10Z_s1warm-santos/
+python scripts/export_labels.py --run data/raw/sentinel2/2026-07-17T19-56-10Z_s1warm-santos/ \
+    --out data/processed/sar_training_exports --tag santos     # NEVER training_exports/ (optical!)
+```
+Note `santos` has 6 chips marked reviewed with **zero** box verdicts — a false start; re-review it.
+
+**These were NOT depth-gated** (`--min-depth` unused, no `depth_m` on the detections) — and that is
+**correct here**. The deep-water guidance exists to avoid bathymetric clutter in open water, but
+Santos/Kaohsiung/Suez are **port approaches**, where the anchored ships we want ARE in shallow water.
+A depth gate would drop the targets. Do not "fix" this.
+
+**Strategic change from W6 + W7 — put a reviewed region in TEST, not TRAIN.** Both items concluded
+independently that the *gate*, not the model, is now the limiting factor: it is 23 boxes / **15
+distinct vessels** with a recall CI of **[0.27, 0.67]**, wide enough that the `sar-deep2` reject was
+noise and that W6's 63% false-alarm reduction could not be confirmed. Holding **Santos** out as a
+second TEST region alongside Gibraltar roughly doubles the gate's evidence and makes every subsequent
+SAR decision cheaper to trust:
+```bash
+python scripts/build_dataset.py --exports data/processed/sar_training_exports \
+    --data data/training_sar --holdout-scene s1deep-gibraltar s1warm-santos
+```
+Then fold in the **W6 peak-preserving despeckle** on the same pass (`scripts/sar_despeckle.py`), so
+the region gain and the filter are measured together on a gate thick enough to resolve them.
+
 ---
 
 ## W3 — Run the live operational loop 🏠
@@ -316,6 +408,53 @@ sanity-checkable (a vessel loitering in a no-take reserve, or a dark detection y
 **Trap:** pick an MPA with actual traffic. A strict IUCN Ia/Ib reserve is often empty water, which is
 the point of the product but makes for a boring first demo. See W8 — a rolling buffer is exactly the
 case where a dropped websocket costs you the overpass.
+
+### W3 outcome — path A ✅ **RAN LIVE 2026-08-03/04. Path B still open.**
+
+**Ran:** a 60-minute live AIS capture (23:13→00:13 UTC) over a Santa Barbara Channel bbox
+(`-120.3 33.35 -118.8 34.5`) chosen to enclose **17 IUCN Ia reserves**, all `NO_TAKE: All` — then
+`ais_fishing.py` → `geofence_ais.py` (looped over all 17 polygons) → `gfw_vessels.py` →
+`alert_violations.py`. **Acceptance MET.**
+
+| | |
+|---|---|
+| Capture | **199 positions / 22 vessels**, 0 skipped, 0 errors, no disconnects in 60 min |
+| Fishing inference | 18 of 22 vessels scored; 4 below the evidence floor → `null`, not `0.0` |
+| Geofence | 17 reserves checked → **1 vessel inside** (Scorpion SMR, Santa Cruz Island) |
+| Identity | GFW: `ISLAND ADVENTURE`, flag USA, gear **PASSENGER**, `fishing_hours 0`, not IUU-listed |
+| Score | **0.10** — the exact transit floor |
+| Default digest | **0 alerts** (correctly suppressed); `--min-severity low` shows it |
+
+**The event is independently corroborated three ways**, which is what makes it a real acceptance
+test rather than a smoke test: (1) its own kinematics — 22.8 kn decelerating to 15.0 kn on an
+easterly track, i.e. a fast transit, not working gear; (2) geography — it is inbound to **Scorpion
+Anchorage**, the main visitor landing for Channel Islands National Park; (3) **GFW independently
+classifies the gear as PASSENGER with zero fishing hours**, agreeing with the local `ais_fishing.py`
+heuristic (p≈0.01) which had no access to that registry. Two independent methods, same verdict.
+
+**The scoring chain behaved exactly as designed.** With only the AIS heuristic the event scored
+**0.11**; re-run with the GFW record (`fishing_hours 0`) it fell to **0.10**, the pure transit floor,
+and `evidence` became `["AIS", "GFW"]`. A legal transit through a no-take reserve is **recorded but
+not paged** — the emit-and-rank house pattern working end to end on live data.
+
+**Operational notes for the next run:**
+- **An empty default digest is the correct steady state**, not a failure. `--min-severity medium`
+  deliberately sits above the 0.10 transit floor, so a well-behaved MPA produces silence. Use
+  `--min-severity low` to see the full record.
+- **The AISStream free feed is sparse here** — ~3 vessels/min over a 140×128 km box that includes the
+  LA approach lanes. Coverage is genuine (pings spread across the full box width; a container ship in
+  the westbound lane), the water is just quiet. Budget an hour or more for a usable sample, and note
+  `ais_fishing.py` needs **≥3 pings over ≥10 min** per vessel before it will score one at all.
+- **TLS asymmetry:** the AISStream **websocket was unaffected** by the Avast interception, but the
+  **GFW HTTPS call failed** with `CERTIFICATE_VERIFY_FAILED` until `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE`
+  were pointed at `scratch_logs/ca_avast_bundle_2026-08.pem`. `gfw_vessels.py` degraded gracefully
+  (null identity record, no crash) rather than failing the run — but the identity join is then
+  silently empty. **Export the bundle before any GFW stage.**
+
+**Still open — path B (full fusion).** This run had no imagery: fusion needs a fresh overpass whose
+`scene.datetime` falls *inside* the AIS capture window, and none was available. W8 (now done) is the
+prerequisite that makes a multi-hour rolling buffer survivable, so path B is unblocked in principle;
+it just needs a capture timed against a real S2/S1 acquisition.
 
 ---
 
@@ -404,41 +543,221 @@ point — never ultralytics' `val` pair — when proposing `sar-deep3`.
 
 ---
 
-## W6–W7 — SAR polish 🏠
+## W6 — SAR speckle A/B (S6) ✅ **RAN 2026-08-03/04 — peak-preserving despeckle is a qualified WIN**
 
-- **W6 speckle A/B (S6):** try Lee / Refined-Lee before tiling and measure recall on 1–5 px targets
-  **both ways**. Speckle filters can smooth away the very targets we want — test, do not assume.
-- **W7 cross-modality S1×S2 (S7):** run `best_sar.pt` on S1 chips and compare against optical
-  detections over the same AOI. Confirms SAR flags large/dark vessels optical missed under
-  cloud/night — the entire justification for the modality. Paired scenes already exist on disk
-  (Fujairah, Singapore, Cyclades), and the 2026-07-15 Fujairah validation already showed backscatter
-  blobs coinciding with optical detections plus extras.
+**Original intent.** Try Lee / Refined-Lee before tiling and measure recall on 1–5 px targets **both
+ways**. Speckle filters can smooth away the very targets we want — test, do not assume.
+
+**Two premises of that framing turned out to be wrong, and one right.**
+
+**1. The stated measurement is impossible on this holdout.** SAR ground-truth box sizes:
+
+| split | boxes | min | median | <11 px |
+|---|---|---|---|---|
+| train | 303 | 4.0 px | 19.0 px | 47 (16%) |
+| val | 147 | 4.0 px | 16.0 px | 36 (24%) |
+| **test (Gibraltar)** | **23** | **12.0 px** | **17.9 px** | **0** |
+
+There are **no 1–5 px targets in TEST** — the smallest is 12 px. "Recall on 1–5 px targets" cannot be
+measured here at all. (Consistent with W5: the `1-2px`/`3-5px` strata are an *optical* 10 m-GSD
+construct.) The answerable question became overall P/R at a swept operating point.
+
+**2. Domain matters, and the obvious filter is the wrong one.** Speckle is *multiplicative* in linear
+power, but `providers/s1.py` emits **dB-stretched 8-bit** chips, where it is approximately *additive*.
+So the correct choice is Lee's original **local-statistics (additive)** form; the multiplicative
+variant would be mis-specified. Noise variance is estimated as the **median of local variances**
+(homogeneous water dominates a maritime scene) — self-calibrating, which matters because s1.py
+stretches every scene differently. Same robust-statistics posture as `sar_seed.py`'s `median + k·MAD`.
+
+**3. Speckle filters really can erase targets — but which filter decides everything.**
+
+**Ran:** filtered copies of the whole SAR tree (labels are geometric, so they transfer unchanged and
+the A/B compares pixels only), then trained each with the *identical* `sar-deep` recipe and gated each
+on **its own** preprocessing (train and inference must match).
+
+Pixel-level, over the 23 GT boxes:
+
+| tree | target peak | bg speckle sd | contrast (peak−bg)/sd |
+|---|---|---|---|
+| original | 253.0 | 29.63 | 6.86 |
+| Lee w7 | 241.9 (−4%) | 23.65 (−20%) | **9.71 (+41%)** |
+| peak-preserving Lee w7 | 242.6 | 23.90 (−19%) | 9.42 (+37%) |
+
+Detection, swept per model on the Gibraltar holdout:
+
+| model | F1 peak | P / R @peak | recall ceiling (conf 0.05) | FP probe @peak | recall 90% CI | mAP50 |
+|---|---|---|---|---|---|---|
+| `sar-deep` (baseline) | 0.415 @0.10 | 0.367 / 0.478 | 0.696 (16/23) | 797 | [0.27, 0.67] | 0.335 |
+| `sar-lee` (plain Lee) | 0.381 @0.10 | 0.421 / 0.348 | **0.391 (9/23)** | — | [0.21, 0.50] | 0.187 |
+| **`sar-leeref`** (peak-preserving) | **0.431 @0.25** | 0.393 / **0.478** | **0.870 (20/23)** | **292** | [0.31, 0.67] | 0.181 |
+
+**The headline: at matched recall (both 11/23 TP, R 0.478) the peak-preserving filter cuts open-water
+false alarms 797 → 292 raw detections, a 63% reduction**, with precision slightly up (0.393 vs 0.367)
+and the recall *ceiling* far higher (0.870 vs 0.696) — i.e. more headroom to trade precision for
+recall, which is exactly what a model with "no usable operating point" (STATUS #10) needs.
+
+**The methodological lesson worth keeping: pixel contrast did NOT predict detector performance — it
+inverted it.** Plain Lee had the *best* contrast (+41%) and the *worst* detection (recall ceiling
+0.696 → 0.391, losing 7 of 16 findable vessels). Smoothing a compact target's peak destroys it even
+while the peak-to-background *ratio* improves. **Do not use SNR/contrast metrics as a proxy for
+detection quality on a learned detector — measure detection.**
+
+**Honest caveats — this is not yet promotable:**
+- **Nothing here is statistically proven.** The recall CIs overlap heavily ([0.27, 0.67] baseline vs
+  [0.31, 0.67] refined) on 23 boxes / **15 distinct vessels** (W7). The FP-probe reduction (797→292)
+  is the largest and most consistent effect, but that probe is **in-TRAIN Fujairah** and therefore
+  directional — it includes real vessels.
+- **IoU-mAP50 got worse** (0.335 → 0.181) even as the instance-level metrics improved. The harness
+  itself flags IoU-mAP as unstable at this scale, and the center-distance metrics are the trustworthy
+  ones — but the disagreement should be resolved on a thicker gate before promoting.
+- **The "refined" filter here is NOT textbook Refined-Lee** (Lee 1981's 8 edge-aligned sub-windows).
+  It is a simpler hybrid: Lee output everywhere except where `x > mean + 2σ`, where the original pixel
+  is kept — i.e. smooth the background, never touch a compact target's peak. Real Refined-Lee should
+  be tried if this direction is pursued.
+- **Adopting it is a pipeline change, not a weights swap.** Inference must despeckle exactly as
+  training did, so it belongs in `providers/s1.py` (chips written despeckled — review then sees what
+  the model sees) or as an explicit `detect_boats.py` preprocessing flag. That decision is open.
+
+**Recommendation:** fold the peak-preserving despeckle into the **W2** attempt rather than promoting
+it standalone — W2 adds regions, which is what actually fixes the model *and* thickens the gate
+enough to tell whether this 63% FP cut is real.
+
+**The filter is committed as `scripts/sar_despeckle.py`** (verified to reproduce the A/B trees
+byte-for-byte, so the script *is* the code behind the numbers above). To redo or extend the A/B:
+```bash
+python scripts/sar_despeckle.py --src data/training_sar --dst data/training_sar_peak   # --mode peak
+python scripts/train.py --weights data/training/yolov8n-p2.yaml --pretrained yolov8n \
+    --data data/training_sar_peak/config.yml --imgsz 1024 --batch 4 \
+    --mosaic 0.5 --close-mosaic 15 --epochs 30 --name sar-peak
+# gate on ITS OWN preprocessing — train and inference must match — and pass --weights explicitly,
+# since a despeckled tree is not in PROMOTED_BY_TREE (resolve_weights accepts an explicit path)
+python scripts/conf_sweep.py --train-dir data/training_sar_peak --holdout s1deep-gibraltar \
+    --fp-scene s1deep-fujairah --imgsz 1024 --weights data/training/runs/sar-peak/weights/best.pt
+```
+The derived trees are **gitignored** (reproducible; not worth ~334 committed PNGs) while
+`data/training_sar/` itself stays tracked as source data.
 
 ---
 
-## W8 — Websocket reconnect for `aisstream_fetch.py` 🟢 *(decide semantics first)*
+## W7 — cross-modality S1×S2 ✅ **RAN 2026-08-03 — the question is not answerable as posed**
 
-**Deliberately left open** during the AUDIT #4 retry round. Every other network call site got the
-shared `scripts/_http.py` policy, but a websocket "retry" means **reconnect-and-resume mid-capture**,
-which changes *capture semantics* — duplicate positions across the reconnect, partial windows, an
-ambiguous `duration`. That is a design decision, not a transport setting, so it was left alone rather
-than half-done.
+**Original intent.** Run the SAR detector on S1 chips, compare against optical detections over the
+same AOI, and confirm SAR flags large/dark vessels optical missed — "the entire justification for the
+modality".
 
-**It is coupled to W3.** A rolling buffer over a fresh overpass is exactly the scenario where a
-dropped connection costs you the acquisition. Decide before running W3 in earnest:
-- **Dedup on reconnect?** (`(mmsi, timestamp)` is the natural key)
-- **Does `--duration` mean wall-clock or connected-time?**
-- **Should the output record connection gaps** so a downstream consumer knows the capture is holey?
-  (`ais_fishing.py` already treats gaps as *unobserved* rather than idle — the same honesty property
-  belongs here.)
+**What was run.** The confound of `best_sar.pt`'s bad operating point was sidestepped by using the
+**human-reviewed** SAR boxes as truth instead of the model. Gibraltar was the strongest available pair
+(reviewed SAR holdout + a paired S2 scene the *same day*); the optical detector was run on
+`s2deep-gibraltar` (61 detections @ conf 0.20) and Suez Gulf was run in the reverse direction
+(optical-reviewed truth vs SAR candidates).
+
+### W7 outcome — S1 and S2 can never image the same water within ~4.4 h
+
+The 10 paired runs on disk have S1↔S2 acquisition gaps of **7.4 h to 859 h**; only two pairs are even
+same-day, and *both* are 7.4 h. That is not luck — it is orbital. Local **solar** overpass time across
+all 20 scenes:
+
+| Provider | Local solar overpass (n=10 each) |
+|---|---|
+| Sentinel-2 | **09:40 – 10:38** (tight, ~10:30 descending node) |
+| Sentinel-1 | **05:15 – 05:51** (descending) **or** **17:54 – 18:04** (ascending) |
+
+Both are sun-synchronous with different local times of ascending node. Measuring the separation
+per-AOI gives two clean clusters and no values in between: **4.42 / 4.47 / 4.70 / 4.70 h** where S1
+used its *descending* pass, and **7.35 / 7.35 / 7.38 / 7.50 / 7.58 / 7.63 h** where it used the
+*ascending* pass. So the **best achievable S1↔S2 separation over one point is ~4.4 h** and the common
+case is ~7.4 h. **No choice of date or AOI improves this.** A 12 kn vessel covers ~98 km in 4.4 h, so
+a per-vessel coincidence test is only
+defensible for *stationary* vessels — and "SAR saw it, optical did not" cannot be distinguished from
+"the vessel was not there yet".
+
+**The measured numbers, for the record** (Gibraltar, 7.4 h gap, after deduplicating **both** modalities
+at 30 m — the same rule `detect_boats.py` applies cross-chip):
+
+| | count |
+|---|---|
+| SAR reviewed boxes | 23 → **15 distinct vessels** (8 were chip-overlap duplicates) |
+| Optical detections @ conf 0.20 | 61 |
+| Coincident within 200 m | **4 / 15 (27%)** |
+| SAR-only | 11 |
+| Optical-only | 57 |
+
+Suez Gulf (the reverse direction, 7.4 h) is the control that proves the confound: **0 of 7**
+optically-confirmed vessels had a SAR candidate within 200 m, median nearest neighbour **2,813 m** —
+it is a transit corridor, so essentially everything moved between overpasses.
+
+**What is genuinely established:** the 4 coincidences agree to **23–175 m across two sensors, two
+CRSs and two providers**, which is the first quantitative confirmation that the S1 and S2 chip
+georeferencing paths are mutually consistent. That was never measured before and it validates the
+`Provider` seam's geolocation.
+
+**What is NOT established, and cannot be with free Sentinel data:** that SAR finds vessels optical
+missed. Re-scoping options, in order of cost:
+1. **Restrict to demonstrably stationary vessels** — an anchorage AOI (Fujairah, Jebel Ali) rather
+   than a strait. Gibraltar/Suez were both transit corridors, which is the worst possible choice.
+2. **Use AIS as the arbiter instead of the other sensor** — for a vessel with AIS at both overpass
+   times, the position at each is known, so "did each modality see it" becomes answerable. This
+   folds W7 into the Phase-3 machinery rather than treating it as an imagery problem.
+3. Accept an **aggregate/statistical** comparison (counts and size distributions over the same water)
+   and drop per-vessel matching entirely.
+
+**Side finding relevant to W2/W5:** the SAR TEST holdout's "23 boxes" are **15 distinct vessels**.
+Per-chip labels are correct (a vessel in two overlapping chips genuinely appears in both), but the
+*effective independent sample* behind the Gibraltar gate is 15, not 23 — so the recall CI **[0.27,
+0.67]** is, if anything, optimistic about its own width. A second reviewed region matters even more
+than "Prioritise a second reviewed region in TEST" already implied.
 
 ---
 
-## W9 — Skylight dark-call cross-check ⛔
+## W8 — Websocket reconnect for `aisstream_fetch.py` ✅ **DONE 2026-08-03**
 
-Free ready-made ground truth for our dark calls (Ai2, skylight.global/platform). A sibling ingester
-+ a comparison harness scoring our dark calls against Skylight's for the same AOI/time. **Gated on
-API registration** — research access first. Not a pipeline dependency; a validation harness.
+**Why it was left open.** Every other network call site got the shared `scripts/_http.py` policy in
+the AUDIT #4 round, but a websocket "retry" means **reconnect-and-resume mid-capture**, which changes
+*capture semantics* rather than transport settings. It was left alone rather than half-done.
+
+**The three semantics decisions (settled 2026-08-03):**
+
+| Question | Decision | Why |
+|---|---|---|
+| `--duration` = wall-clock or connected-time? | **Wall-clock** — deadline fixed at entry; an outage eats into the window | Fusion is only valid when `scene.datetime` falls *inside* the capture window, so a capture must cover a known stretch of time, not accumulate a quota. Also keeps the end time predictable for cron. |
+| Dedup on reconnect? | **Yes, on `(mmsi, timestamp)`** | A reconnect can in principle re-deliver a ping. Distinct from `--dedup latest` (one ping per vessel), which is untouched and still applied afterwards. |
+| Record connection gaps? | **Yes — full connection log** | Same honesty property `ais_fishing.py` already applies to AIS gaps: unobserved time is recorded, never assumed. |
+
+**A pre-existing bug was found and fixed in passing.** `main()` wrote `"duration_s": args.duration`
+— the *requested* window — unconditionally, while `collect()` would `break` out of its loop when the
+server closed the socket. So a 60-minute capture truncated at minute 3 wrote a file claiming
+`duration_s: 3600`, and **nothing downstream could tell it had been truncated**. Ctrl-C had the same
+problem. The output now carries what actually happened:
+
+```json
+"duration_s": 3600,        // requested (unchanged, back-compatible)
+"elapsed_s": 3600.0,       // wall-clock actually spent
+"connected_s": 2870.4,     // of which genuinely connected
+"reconnects": 2,
+"gaps": [{"from": "...T23:31:04Z", "to": "...T23:36:12Z", "seconds": 308.0}],
+"truncated": false,
+"duplicates_dropped": 0
+```
+
+**Shipped:** auto-reconnect until the wall-clock deadline with capped exponential backoff
+(`reconnect_delay()` — 0s/2s/4s/8s… capped at 30s, mirroring `_http.py`'s shape and pure/testable),
+`(mmsi, timestamp)` duplicate suppression, per-session connected-time accounting, and gap intervals
+stamped in UTC. An AISStream **`error` frame still fails fast and is never retried** — a bad key or
+bbox would otherwise just hammer the endpoint. New flags: `--no-reconnect` (old behaviour),
+`--reconnect-backoff`, `--max-backoff`, each with an `AIS_*` env fallback in house style.
+
+**Acceptance: MET.** 10 new offline tests (suite **253 → 263**), all using an injected `sleep` so
+they never actually wait: reconnect-after-drop records a gap, a replayed ping is dropped as a
+duplicate, a failed handshake is retried, an `error` frame is *not* retried, `--no-reconnect` stops
+at the first drop, and the backoff schedule is pinned. Run time 0.016 s.
+
+**A flapping-endpoint bug was caught in self-review before this ever ran live.** The first cut reset
+the backoff counter on *every received frame* ("a frame proves the connection is usable"). That is
+wrong for the exact failure it needs to handle: an endpoint that serves one frame and drops would
+reset the counter every cycle and be reconnected at **0 s delay forever** — a hammering loop. The
+reset is now gated on a session staying up for `stability_s` (default 30 s), so a flapping endpoint
+escalates 0s→2s→4s→… while a genuinely healthy session still resets to 0. Both directions are pinned
+by tests (`test_flapping_endpoint_escalates_backoff`, `test_stable_session_resets_backoff`).
 
 ---
 
@@ -452,6 +771,8 @@ future session does not rediscover them. Do not undo these conclusions without n
 | **imgsz 1280 (plain, no TTA)** | ❌ non-win | Port Said identical; Alonnisos recall **0.70→0.49**. Upscaling past the 1024 *train* size loses the 1–5 px vessels it was meant to enlarge. 1536 not worth testing. The big-ship lift comes from **`--augment` TTA**, not raw imgsz. |
 | **NDWI / NIR open-water filter for precision** | ❌ calibrated non-win | `ndwi_mask.py` + `--open-water` are built, correct, and **off by default**. The premise ("FPs sit on blank water") is FALSE: glint/foam/swell reflect NIR *more* than 1–5 px boats (FP min-NDWI median −0.122 vs TP −0.027). At −0.10 it drops 7/20 FP but **60/63 TP**. A water index cannot reject real spectral water *features*. |
 | **Piling on hard negatives** (`finetune-reef`) | ⚠️ counter-lesson | Recall *and* base mAP both dropped — the detector went over-conservative. Hence `--max-neg-ratio`. Add **positives** to fix recall; use negatives surgically. |
+| **Plain Lee despeckling for SAR** | ❌ measured non-win (2026-08-04) | Best *pixel contrast* of anything tried (+41%) and the **worst detection**: recall ceiling 0.696→**0.391**, losing 7 of 16 findable vessels. Smoothing a compact target's peak destroys it even as peak-to-background ratio improves. The **peak-preserving** variant (Lee everywhere except `x > mean+2σ`) is the one that works — see "W6 outcome". |
+| **Pixel SNR / contrast as a proxy for detector quality** | ❌ actively misleading (2026-08-04) | W6 measured +41% contrast for the filter that *hurt* detection most. Contrast and detection ranked in **opposite order** across three variants. Measure detection. |
 | **Textbook CFAR / top-hat for SAR seeding** | ❌ fails by construction | `providers/s1.py`'s dB-percentile stretch is tuned for *display*: water sits mid-bright (median ~136/255) and vessels saturate at 255. CFAR assumes dark water. `sar_seed.py` instead thresholds the dual-pol geometric mean `sqrt(VV·VH)` at an adaptive `median + k·MAD` — robust and stretch-invariant. |
 | **Warm-starting SAR from the optical `best.pt`** | ❌ wrong priors | Different sensor, different texture statistics. Use `--pretrained yolov8n` or a SAR-pretrained backbone. |
 | **One more SAR scene to fix generalization** (`sar-deep2`) | ❌ regressed | +Singapore alone dropped the Gibraltar gate P 0.392→0.285. SAR needs *regions* (W2-A) or *transfer* (W2-B). |
@@ -459,6 +780,7 @@ future session does not rediscover them. Do not undo these conclusions without n
 | **Raising `--conf` to fix precision** | ❌ wrong tool | Trades away the recall the 10 m GSD already caps. The architecture is deliberately *recall-favouring candidate generation, then filter downstream* (water mask → AIS fusion). |
 | **Paid/commercial imagery (Planet, VHR)** | ⛔ out of scope | Hard $0-budget constraint. Refs were removed deliberately; do not reintroduce. |
 | **batch 16 @ imgsz 1024 with the P2 head** | 💥 crashes | Silent torch C++ abort mid-epoch. Use **`--batch 4`** (plateaus ~7 GB). |
+| **Per-vessel S1×S2 coincidence matching for MOVING vessels** | ❌ structurally impossible (2026-08-03) | Sentinel-2 crosses at ~10:30 local solar; Sentinel-1 at ~05:45 or ~18:00. The **minimum** S1↔S2 gap over one point is ~4.4 h (measured across 10 paired AOIs: 4.42–4.70 h when S1 is descending, 7.35–7.63 h ascending, nothing between), during which a 12 kn vessel moves ~98 km. Gibraltar 4/15 coincident, Suez Gulf 0/7. No date or AOI choice fixes it — re-scope to stationary vessels, or arbitrate with AIS. See "W7 outcome". |
 | **More Adriatic-class optical data to lift Kornati *recall*** | ❌ measured dead end (2026-08-02) | W1 ran in full: 3 in-class scenes, **1093 fresh boxes**, 3 schedules (30/60/60-corrected). Aggregate 4-holdout F1 moved **±0.002**; Kornati's recall ceiling 0.904→0.891 (unchanged). It *did* buy precision (~45% fewer open-water FPs). Kornati R ~0.5–0.6 at usable precision is the **10 m GSD floor**, not a data gap → go structural (SAR/AIS), not more optical. |
 | **Longer training (60 ep) to squeeze more from a warm start** | ❌ non-win + forgetting | Satellite val mAP50 rose 0.785→0.798 but holdout F1 did **not** follow (0.705→0.706), and base-photo recall *fell* 0.585→0.556. Val mAP50 is a poor proxy for the holdout gates. Also: `close_mosaic` counts back from the END of training, so holding it at 15 while doubling epochs moved the mosaic-free phase to epoch 46 and patience-20 early-stopped at 21 with "best = epoch 1". **Scale `--close-mosaic` proportionally with `--epochs`.** |
 
@@ -636,10 +958,10 @@ so it makes the current model good enough. This is the project's stated purpose.
 **Status: COMPLETE.** The pipeline was built + offline-tested 2026-07-23, **live-validated 2026-07-26**
 (AISStream connected first try — 41/41 positions over Singapore; three GFW v3 corrections landed with
 real captured-response fixtures; first real violations produced over Anacapa), and extended
-2026-07-29 with three more offline stages. `docs/PHASE3_PLAN.md` holds the checklist — **every box is
-ticked** except the optional Skylight cross-check (**W9**). Per-script contracts + first-run setup are
-in `CLAUDE.md`. The only remaining Phase-3 work is **W3** (the near-real-time operational mode) and
-**W8** (websocket reconnect, which W3 depends on).
+2026-07-29 with three more offline stages. `docs/PHASE3_PLAN.md` holds the checklist — **every box in
+the definition of done is ticked**. Per-script contracts + first-run setup are in `CLAUDE.md`. The only
+remaining Phase-3 work is **W3** (the near-real-time operational mode) and **W8** (websocket reconnect,
+which W3 depends on).
 
 Built — **nine** scripts, each its own module (ingestion never imports the matcher — house rule):
 - **`fuse_violations.py`** (pure stdlib) — the matcher. Per in-MPA detection, dark-vs-matched via a
@@ -730,8 +1052,10 @@ so a future session can see what was already tried and does not redo it._
   **50 offline tests** (suite 203→253) over the logic that decides promotions. Optical numbers
   re-verified unchanged; the SAR findings are in "W5 outcome" above.
 - **Still open, now tracked in THE WORK QUEUE above:** cross-modality S1×S2 (**W7** / `IMPROVEMENT_PLAN.md`
-  S7), Skylight cross-check (**W9** / `PHASE3_PLAN.md` 3B), the detector-accuracy levers **O3** →
-  **W4** and **O4** → **W1**, and websocket reconnect (**W8**).
+  S7), the detector-accuracy levers **O3** → **W4** and **O4** → **W1**, and websocket reconnect (**W8**).
+  (The Skylight dark-call cross-check — `PHASE3_PLAN.md` 3B, formerly W9 — was **dropped from the queue
+  2026-08-03**: it was gated on external API registration, is not a pipeline dependency, and the idea
+  stays recorded in `PHASE3_PLAN.md` if it is ever wanted back.)
   (**O5** inference/tiling tuning and **O6** eval-harness hardening were **measured/exercised
   2026-07-25** and are closed — imgsz 1024 is confirmed and 1280 is a non-win; see "Do not re-attempt".)
 
@@ -793,7 +1117,7 @@ commercial VHR/SAR per-alert tasking). Recorded as the north-star vision, not a 
 | Geofence AIS × MPA (P3) ✅ | `geofence_ais.py --ais <file>.json --wdpa-id <id> --vessels <fishing>.json` → `"reported"` events (+ `.geojson`) |
 | Alert digest (P3) ✅ | `alert_violations.py --run <run> --events <geofence>.json [--min-severity critical] [--out-markdown a.md] [--exit-code]` |
 | One-shot driver (P3) ✅ | `scan_violations.py --run <run> --ais <file>.json [--gfw --wdpa-id <id>]` (fuse → enrich → report) |
-| Test the P3 stages offline | `python -m unittest discover -s scripts/tests -p 'test_*.py'` (253 tests; synthetic, no network / key / ML deps — incl. 50 for the eval/gate harness) |
+| Test the P3 stages offline | `python -m unittest discover -s scripts/tests -p 'test_*.py'` (263 tests; synthetic, no network / key / ML deps — incl. 50 for the eval/gate harness and 10 for websocket reconnect) |
 | Violation schema | `docs/PIPELINE.md` → `violation_events.json` (pinned) |
 
 ## Key sources

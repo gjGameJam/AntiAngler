@@ -10,7 +10,7 @@ loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatte
 `AUDIT.md`; for the daily GFW/WDPA streams see `../CLAUDE.md`.
 
 **➡ For what to do next, read `ROADMAP.md` → "THE WORK QUEUE"** — it carries the prioritized items
-(W1–W9) with exact commands, acceptance tests and traps, plus a **"Do not re-attempt"** table of
+(W1–W8) with exact commands, acceptance tests and traps, plus a **"Do not re-attempt"** table of
 measured dead ends. This file is the *state*; that one is the *plan*.
 
 ---
@@ -21,7 +21,7 @@ measured dead ends. This file is the *state*; that one is the *plan*.
 - _(superseded)_ `finetune-diverse` (promoted 2026-07-26, was **`conf 0.25`**) — the P2 arch warm-started from `finetune-bigship` after the **13-set label harvest** (11 new reviewed scenes folded into TRAIN: Lofoten, Curaçao, SB-Channel lanes, Anacapa, Santos, Kaohsiung, Jebel Ali, Suez ×2, Durban, False Bay; train 659→2,512 images with `--max-neg-ratio 1.0` guarding the reef counter-lesson). ⚠️ `detect_boats.py`'s defaults **no longer** bake this in — since 2026-08-02 they are `finetune-adriatic`'s (`conf 0.20`, imgsz 1024). Backups: `best_finetune-bigship.pt` (prior live), `best_finetune-smallvessel.pt`, `best_finetune-openocean.pt`, `best_finetune-p2-1024.pt`, `best_finetune-aug-1024.pt`, `best_finetune-aug-640.pt`, `best_multiscene.pt`, `best_baseline_pre-multiscene.pt` (see the Model progression table).
 - **Kornati (Adriatic) is the 2nd small-vessel holdout — and it broke the 0.67 story (2026-07-26).** Fresh never-trained region, 16 chips / **156 human boxes**: the then-live `finetune-bigship` scored only **P 0.73 / R 0.37** (CI [0.30, 0.45]) — the Alonnisos 0.67 does **not** transfer cross-region (open problem #4 was right to worry). `finetune-diverse` lifted it to R 0.51 @0.25 (CI [0.42, 0.60]); the live `finetune-adriatic` reaches **R 0.590 / P 0.558 @0.20** (CI [0.50, 0.68]). ⛔ **The "durable lever is more Adriatic/karst-coast data" reading was TESTED AND REFUTED by W1 (2026-08-02)** — 1093 fresh in-class boxes across 3 scenes and 3 training schedules moved aggregate 4-holdout F1 by ±0.002 and left the recall *ceiling* flat (0.904→0.891). Kornati R ~0.5–0.6 at usable precision is the **10 m GSD floor**. Kornati stays a pure holdout (no Adriatic scene in TEST's region is in TRAIN). **Do not spend another optical review cycle here expecting recall** — go structural (SAR W2 / AIS W3).
 - **The whole in-repo active-learning loop works** end-to-end: `sat_fetch → detect_boats → review_server → export_labels → build_dataset → train → promote → rescan`.
-- **Phase 3 (AIS dark-vessel fusion) — the whole sandbox-buildable pipeline is BUILT & offline-tested (2026-07-23).** Six scripts, each its own module (ingestion never imports the matcher): **`fuse_violations.py`** (the matcher — dark-vs-matched via a velocity-aware feasible-movement envelope; optional `--vessels` GFW enrichment), **`aisstream_fetch.py`** (live AIS → normalized contract), **`marinecadastre_fetch.py`** (historical AIS archive CSV → same contract), **`gfw_vessels.py`** (GFW identity/fishing/Insights; `--region-bbox`/`--wdpa-id` makes fishing_probability MPA-specific), **`report_violations.py`** (ranked CSV + self-contained HTML), and **`scan_violations.py`** (thin batch driver). Schema pinned in `docs/PIPELINE.md`; **98 offline P3 tests** (**253 suite-wide** as of 2026-08-03), no network/key/ML deps. ✅ **GFW calls live-verified 2026-07-26 at home** — three v3 corrections landed (`events` needs `offset` with `limit`; identity picks the freshest cluster + gear from `combinedSourcesInfo`; insights include is `VESSEL-IDENTITY-IUU-VESSEL-LIST` → 201 flat object), each locked by a real captured-response fixture in `scripts/tests/fixtures/`. ✅ **First real violations landed 2026-07-26 (1C, historical path):** Anacapa Island SMR × MarineCadastre archive → 2 confirmed DARK (one wake vessel); the adjacent-lanes bbox run → 36 matched (all GFW-enriched live; best match 2 s / 362 m) / 7 dark. The first fusion caught + same-day-fixed three matcher/ingest defects (AIS sentinel SOG/COG passthrough, stale-ping admission, envelope-size attribution bias) — see `docs/PHASE3_PLAN.md` 1C. ✅ **AISStream live-verified 2026-07-26** (first connect: Singapore Strait, 41/41 positions kept from 37 vessels, 0 skipped/errors; file fuses cleanly). **Phase 3's definition of done is MET** — 1A+1B+1C all closed 2026-07-26; the only remaining W-item is the optional Skylight cross-check (3B) and the live-capture 1C variant (rolling AIS buffer over a fresh overpass) as an ongoing operational mode.
+- **Phase 3 (AIS dark-vessel fusion) — the whole sandbox-buildable pipeline is BUILT & offline-tested (2026-07-23).** Six scripts, each its own module (ingestion never imports the matcher): **`fuse_violations.py`** (the matcher — dark-vs-matched via a velocity-aware feasible-movement envelope; optional `--vessels` GFW enrichment), **`aisstream_fetch.py`** (live AIS → normalized contract), **`marinecadastre_fetch.py`** (historical AIS archive CSV → same contract), **`gfw_vessels.py`** (GFW identity/fishing/Insights; `--region-bbox`/`--wdpa-id` makes fishing_probability MPA-specific), **`report_violations.py`** (ranked CSV + self-contained HTML), and **`scan_violations.py`** (thin batch driver). Schema pinned in `docs/PIPELINE.md`; **108 offline P3 tests** (**263 suite-wide** as of 2026-08-03), no network/key/ML deps. ✅ **GFW calls live-verified 2026-07-26 at home** — three v3 corrections landed (`events` needs `offset` with `limit`; identity picks the freshest cluster + gear from `combinedSourcesInfo`; insights include is `VESSEL-IDENTITY-IUU-VESSEL-LIST` → 201 flat object), each locked by a real captured-response fixture in `scripts/tests/fixtures/`. ✅ **First real violations landed 2026-07-26 (1C, historical path):** Anacapa Island SMR × MarineCadastre archive → 2 confirmed DARK (one wake vessel); the adjacent-lanes bbox run → 36 matched (all GFW-enriched live; best match 2 s / 362 m) / 7 dark. The first fusion caught + same-day-fixed three matcher/ingest defects (AIS sentinel SOG/COG passthrough, stale-ping admission, envelope-size attribution bias) — see `docs/PHASE3_PLAN.md` 1C. ✅ **AISStream live-verified 2026-07-26** (first connect: Singapore Strait, 41/41 positions kept from 37 vessels, 0 skipped/errors; file fuses cleanly). **Phase 3's definition of done is MET** — 1A+1B+1C all closed 2026-07-26. ✅ **The live operational loop (W3 path A) RAN 2026-08-03/04**: a 60-min AISStream capture over the Santa Barbara Channel (199 positions / 22 vessels, 0 errors) → `ais_fishing` (18/22 scored) → `geofence_ais` looped over **17 IUCN Ia reserves** → **1 vessel inside** Scorpion SMR (`ISLAND ADVENTURE`, GFW-confirmed **PASSENGER**, `fishing_hours 0`) → scored at the **0.10 transit floor** → default digest correctly **empty**, `--min-severity low` shows it. Independently corroborated by kinematics (22.8→15.0 kn transit into Scorpion Anchorage), geography, and GFW's registry. **Still open: W3 path B** — full fusion needs an overpass whose `scene.datetime` falls inside the AIS window. ⚠️ **The GFW HTTPS call needs the Avast CA bundle exported** (`REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE` → `scratch_logs/ca_avast_bundle_2026-08.pem`); without it `gfw_vessels.py` degrades to a **null identity record without failing**, so the join goes silently empty. The AISStream websocket is unaffected. (The optional Skylight cross-check, 3B/formerly W9, was dropped from the work queue 2026-08-03.)
 - **Deploy point & operating point** ⚠️ *(HISTORICAL — a 2026-07-25 record for the long-superseded `finetune-smallvessel`. The live model is `finetune-adriatic` at **imgsz 1024 / conf 0.20**; the "keep conf 0.15" conclusion below applied to that old model only. The imgsz-1280 and TTA findings DO still hold.)*. On the relabeled holdouts at conf 0.15 / imgsz 1024: **Alonnisos** (small-vessel, 76 boxes) **P 0.40 / R 0.70, FP/chip 1.23, recall 90% CI [0.59, 0.79]**; **Port Said** (big-ship, 42 boxes) **P 0.97 / R 0.69, FP/chip 0.08**. `conf_sweep.py` puts the **F1 peak at conf 0.15** → operating point unchanged. **Plain imgsz 1280 is a non-win:** Port Said identical, Alonnisos recall *drops* 0.70→0.49 (upscaling past the 1024 train size loses the 1–5 px vessels). The **big-ship recall lever is `--augment` (TTA)**, not raw imgsz: `--imgsz 1280 --augment` lifts Port Said recall 0.69→**0.81** (large 0.79→0.86) at unchanged precision — but it is **big-ship-only** (it worsens small-vessel/cluttered scenes), so it stays an opt-in profile, never the default. **Keep imgsz 1024 / conf 0.15; 1536 not worth testing.**
 - **Large-ship recall (0.69) is a training-coverage gap, not a threshold or GSD limit** (2026-07-16): some Port Said misses are unmistakable bright-ship-with-wake signatures; conf 0.05 recovers only 1 more large ship while precision collapses to 0.70. Big ships were learned from just 2 scenes (Fujairah 131 + Gibraltar 29). **Durable fix = scale the big-ship AL loop** (more dense-anchorage scenes → the staged Finland set below targets exactly this).
 - **Alonnisos holdout relabeled (2026-07-16) — trustworthy baseline.** Full human re-review: **76 boats** (was 49 — a ~55% undercount). Corrected labels in TEST via `build_dataset.py --holdout-scene fallbacktest portsaid alonnisos`. This is the honest baseline O3 (hard negatives) is measured against — many earlier "FPs" were real unlabeled boats.
@@ -113,29 +113,73 @@ TRAIN carries ~1,300+ real reviewed boat boxes across big-ship + small-vessel do
 
 ## SAR model + data (Phase 2) — a separate tree, a separate model, a separate gate
 
-`data/training_sar/` (train 102 / val 30 / **test 35**) is assembled by the same modality-agnostic
+`data/training_sar/` (train 90 / val 49 / **test 84**) is assembled by the same modality-agnostic
 `build_dataset.py --exports data/processed/sar_training_exports --data data/training_sar
---holdout-scene s1deep-gibraltar`. **No base-photo layer** — purely reviewed SAR chips. Verified on
-disk 2026-08-03; all chips 640×640, `<run>__<chip>` named, same as optical.
+--holdout-scene s1deep-gibraltar s1warm-santos --max-neg-ratio 1.0`. **No base-photo layer** — purely
+reviewed SAR chips, 640×640, `<run>__<chip>` named. Rebuilt 2026-08-04 (W2) with **two** TEST regions;
+5 export tags (`deep`, `singapore`, `santos`, `kaohsiung`, `suezgulf`) = 301 chips.
 
 | Scene (run) | Region class | Chips | Role |
 |---|---|---|---|
 | `…20-56-26Z_s1deep-fujairah` | deep anchorage, Gulf | 32 tr / 10 val | TRAIN+VAL |
 | `…20-59-34Z_s1deep-hormuz` | lane chokepoint, Gulf | 57 tr / 15 val | TRAIN+VAL |
 | `…16-31-11Z_s1deep-singapore` | strait, SE Asia | 13 tr / 5 val | TRAIN+VAL (staged for the next attempt) |
-| `…20-57-46Z_s1deep-gibraltar` | strait, Atlantic/Med | **35** | **TEST holdout** (23 boxes) |
+| `…19-56-10Z_s1warm-santos` | port approach, Brazil | **49** | **TEST holdout #2** (99 boxes) — reviewed 2026-08-04 |
+| `…19-57-41Z_s1warm-kaohsiung` | port approach, Taiwan | 49 | TRAIN+VAL (47 boxes) — reviewed 2026-08-04 |
+| `…19-54-59Z_s1warm-suezgulf` | Red Sea / Suez | 36 | TRAIN+VAL (14 boxes) — reviewed 2026-08-04 |
+| `…19-56-58Z_s1warm-jebelali` | Gulf (dup family) | 56 | ⏸ seeded, still unreviewed (deprioritised — same family as Fujairah) |
+| `…20-57-46Z_s1deep-gibraltar` | strait, Atlantic/Med | **35** | **TEST holdout** (23 boxes = **15 distinct vessels**, see W7) |
 
 | Run | Data | Gibraltar gate | Promoted |
 |---|---|---|---|
 | **`sar-deep` (07-26)** | `deep/` tag: 149 chips / 206 boxes / 112 hard-neg (Fujairah+Gibraltar+Hormuz) | P 0.392 / R 0.478 / mAP50 0.335 — **all at conf ≈0.10**; F1 peak 0.415, recall CI [0.27, 0.67] | ✅ **LIVE** (`best_sar.pt`) — but see below |
 | `sar-deep2` (07-26) | + `singapore/` tag (267 boxes / 18 chips) | P 0.285 / R 0.435 / mAP50 0.298 | ❌ no — regressed; **W5 later showed the gate CI is ±0.2, so this reject was within noise** |
+| **`sar-deep3` (08-04)** | + `santos`/`kaohsiung`/`suezgulf` (**160 boxes / 92 hard-neg** over 134 reviewed chips) | **P 0.545 / R 0.522 / mAP50 0.415 @conf 0.10** — and Santos 0.316/0.424 where `sar-deep` scored **0/99** | ✅ **LIVE** (`best_sar.pt`, deploy conf **0.10**) |
 
-⚠️ **`best_sar.pt` has no usable operating point** (W5, 2026-08-03 — open problem #10). Quieting its
-false alarms costs nearly all recall. It is a **model** gap (W2: more regions / xView3 transfer), not a
-threshold gap. It also scores **~0 on unseen regions** (per-scene dB stretch in `providers/s1.py`), so
-seed a new region's review with the classical `sar_seed.py`, never with `best_sar.pt`.
+✅ **`best_sar.pt` now HAS a usable operating point** — **conf 0.10**, the first swept SAR deploy point
+(W2, 2026-08-04; open problem #10 largely resolved). Precision +49% and false alarms nearly halved on
+Gibraltar versus the outgoing model. ⚠️ Still **noisy on a fresh region**: 1.86 FP/chip on Santos at
+the deploy point, so human review remains the quality gate. It also still degrades out-of-region —
+`sar-deep` scored a literal **0/99 on Santos at every conf including 0.05**, and while `sar-deep3` is
+far better, seed a genuinely new region's review with the classical `sar_seed.py` rather than trusting
+the model cold. ⚠️ **`sar_seed.py`'s own precision is region-dependent**: measured 2026-08-04 at ~80%
+on Santos, **~28%** on Kaohsiung, **~10%** on Suez Gulf — it is tuned for Fujairah-like deep
+anchorages, so budget review time accordingly in cluttered coastal water.
 
 **Never warm-start SAR from the optical `best.pt`** — wrong texture priors; use `--pretrained yolov8n`.
+
+🔬 **Speckle A/B ran 2026-08-03/04 (W6) — a peak-preserving despeckle is a qualified win, plain Lee is
+a trap.** Filtering the dB-stretched chips with Lee's **additive/local-statistics** form (the correct
+domain — speckle is multiplicative in linear power but additive after the log/dB transform), noise
+variance estimated as the median of local variances:
+
+| model | F1 peak | P / R @peak | recall ceiling | FP probe @peak | mAP50 |
+|---|---|---|---|---|---|
+| `sar-deep` (live) | 0.415 @0.10 | 0.367 / 0.478 | 0.696 | 797 | 0.335 |
+| `sar-lee` plain Lee | 0.381 @0.10 | 0.421 / 0.348 | **0.391** | — | 0.187 |
+| `sar-leeref` peak-preserving | **0.431 @0.25** | 0.393 / **0.478** | **0.870** | **292** | 0.181 |
+
+At **matched recall**, the peak-preserving filter cuts open-water false alarms **63%** and lifts the
+recall ceiling 0.70→0.87. **Not promoted**: recall CIs overlap on 23 boxes / 15 vessels, IoU-mAP50
+moved the *other* way, and adopting it is a pipeline change (inference must despeckle exactly as
+training did). Fold it into the W2 attempt, which thickens the gate. Trees left on disk:
+`data/training_sar_lee/`, `data/training_sar_leeref/`; runs `sar-lee`, `sar-leeref`.
+⚠️ **Pixel contrast is not a proxy for detection** — plain Lee had the best contrast (+41%) and the
+worst recall. See `ROADMAP.md` → "W6 outcome".
+
+⚠️ **The Gibraltar gate's 23 boxes are 15 distinct vessels** (found 2026-08-03 by W7; 8 are
+chip-overlap duplicates — a vessel in two overlapping chips is legitimately labelled in both, so the
+per-chip labels are correct). The consequence is for *gate power*, not training: the effective
+independent sample behind the recall CI **[0.27, 0.67]** is 15, not 23, so that CI is optimistic about
+its own width. A second reviewed SAR region in TEST is the fix (W2).
+
+✅ **Cross-modality georeferencing is confirmed** (W7, 2026-08-03): 4 vessels matched across the
+Gibraltar S1/S2 pair agree to **23–175 m** across two sensors, two CRSs and two providers — the first
+quantitative check that the `Provider` seam's S1 and S2 geolocation paths agree. **But per-vessel
+S1×S2 vessel matching is structurally impossible** for moving vessels: the two satellites' sun-
+synchronous orbits guarantee a **≥4.4 h** gap over any point (measured across 10 paired AOIs: 4.42–4.70 h
+when S1 is descending, 7.35–7.63 h ascending, nothing in between).
+See `ROADMAP.md` → "W7 outcome".
 
 ---
 
@@ -157,7 +201,13 @@ seed a new region's review with the classical `sar_seed.py`, never with `best_sa
    in-sample Fujairah probe fires **24.9 dets/chip**, and the 90% recall CI is **[0.27, 0.67]** on 23
    boxes. So `best_sar.pt` has **no swept deploy conf and no usable operating point yet**; every
    optical model is quoted at one, this never was. **New open item → see #10.**
-10. **`best_sar.pt` has no usable operating point** (found 2026-08-03 by the new harness). F1 peaks at
+10. ~~**`best_sar.pt` has no usable operating point**~~ **LARGELY RESOLVED 2026-08-04 (W2).**
+   `sar-deep3` is promoted at a swept **conf 0.10** with Gibraltar P 0.545 / R 0.522 (was 0.367 /
+   0.478) and FP/chip 0.29 (was 0.54). The gate is also no longer one thin region: **122 boxes across
+   Gibraltar + Santos**, and the Santos recall CIs old-vs-new are *disjoint* — the first statistically
+   decisive SAR result. **Residual:** 1.86 FP/chip on Santos at the deploy point, so a fresh region is
+   still noisy. Next levers are the W6 despeckle re-run on this thicker gate, and a third region.
+   *(Original finding, for the record:)* F1 peaked at
    **0.415 @ conf 0.10** (P 0.367 / R 0.478); quieting the false alarms costs nearly all recall
    (R 0.217 @ 0.25), and the recall ceiling is ~0.70 @ conf 0.05. *Caveat: the Fujairah probe is a busy
    anchorage in TRAIN, so it is directional and includes real vessels — not comparable to the optical
@@ -204,8 +254,10 @@ Summary in impact order:
 closed — one shared policy in `scripts/_http.py` wired into every `requests` call site, plus
 `GDAL_HTTP_MAX_RETRY`/`RETRY_DELAY` on the `/vsicurl` COG reads, so the fetch-heavy work in steps 1–2
 above stops losing a run to a transient 5xx. SAR runs now land in their own `data/raw/sentinel1/` root.
-Not covered: websocket reconnect for `aisstream_fetch.py` (a capture-semantics decision, deliberately
-left open), and retries do **not** help the Avast schannel wall.
+Not covered at the time: websocket reconnect for `aisstream_fetch.py` — **now closed 2026-08-03
+(W8)**: auto-reconnect with capped backoff, wall-clock `--duration`, `(mmsi, timestamp)` dedup, and a
+connection log (`elapsed_s`/`connected_s`/`reconnects`/`gaps`/`truncated`) so a truncated capture no
+longer claims the full window. Retries still do **not** help the Avast schannel wall.
 
 **Three offline product stages landed 2026-07-29** (the sandbox-buildable Tier-1 roadmap items), taking
 the suite to **203 offline tests**:
