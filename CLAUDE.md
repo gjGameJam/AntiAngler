@@ -10,6 +10,16 @@ The initial pipeline filters the World Database of Protected Areas (WDPA) for MP
 
 The end-to-end satellite ship-detection loop — collect imagery over MPAs (`sat_fetch.py`) → scan chips for boats (`detect_boats.py`) → report detections + human-in-the-loop review (`review_server.py`) → export corrected labels to retrain the model (`export_labels.py`) — is built and specified in `docs/PIPELINE.md` (the build spec with all inter-stage data contracts). `docs/AUDIT.md` tracks known antipatterns/inefficiencies in priority order. `docs/STATUS.md` is the live status/handoff — which model is promoted, per-run eval numbers, open problems, and next steps (read it first when resuming detector/training work). `docs/ROADMAP.md` is the forward plan — the phased path beyond the current model (P2 head, Sentinel-1 SAR, and the AIS dark-vessel fusion that is the actual product), with file-level pointers and the `main()`-guard refactor those phases depend on. `docs/PHASE3_PLAN.md` is the actionable "what's left to finish Phase 3" checklist (live validation, batch driver, ranked output, optional Skylight/historical-AIS) with a definition of done — read it when resuming the AIS-fusion product work.
 
+## Working preferences (how the user wants this repo worked on)
+
+**Reviewing satellite data means the labeling website — never a generated page.** When the user is
+reviewing imagery, chips or detections, the deliverable is `review_server.py`: launch it and hand over
+the tokenized `127.0.0.1` URL. **Do not build an artifact, dashboard, HTML report or summary page for
+satellite review** — the review UI is where the work happens, and a rendered page is a detour that
+costs time without helping label anything. Batch multiple scenes into one server (`--run A B C`)
+rather than opening several. Findings still belong in `docs/` as prose + tables, as they always have;
+this rule is specifically about not substituting a rendered page for the labeling tool.
+
 ## Running Scripts
 
 All scripts resolve paths relative to `Path(__file__)`, so they can be run from any working directory:
@@ -35,7 +45,10 @@ python scripts/sat_fetch.py --bbox <minLon> <minLat> <maxLon> <maxLat> --dry-run
 python scripts/detect_boats.py --run data/raw/sentinel2/<run>/
 
 # Step 6: Review detections in a local browser UI (prints a tokenized 127.0.0.1 URL to open)
+# --run takes MULTIPLE run dirs: chips are batched into one session and each verdict is written
+# back to its own run's reviews.json, so export_labels.py --run <dir> is unchanged.
 python scripts/review_server.py --run data/raw/sentinel2/<run>/
+python scripts/review_server.py --run <runA> <runB> <runC>     # batch several scenes in one sitting
 
 # Step 7: Export reviewed chips as a YOLO training set for fine-tuning the detector
 python scripts/export_labels.py --run data/raw/sentinel2/<run>/
@@ -61,11 +74,15 @@ for H in kornati-adriatic alonnisos portsaid fallbacktest; do
   python scripts/eval_holdout.py --old data/training/weights/best.pt --old-imgsz 1024 \
       --new data/training/runs/<run>/weights/best.pt --new-imgsz 1024 --holdout "$H" --conf <swept>
 done
-# SAR: same two commands, pointed at the SAR tree (weights default to best_sar.pt, never best.pt)
-python scripts/conf_sweep.py  --train-dir data/training_sar --holdout s1deep-gibraltar \
-    --fp-scene  s1deep-fujairah --imgsz 1024
-python scripts/eval_holdout.py --train-dir data/training_sar --holdout s1deep-gibraltar \
-    --fp-scenes s1deep-fujairah --imgsz 1024 --conf <swept>
+# SAR: same two commands, pointed at the SAR tree (weights default to best_sar.pt, never best.pt).
+# ⚠️ The SAR gate is TWO holdout regions since 2026-08-04 — LOOP them. Gating on Gibraltar alone is
+# what hid the fact that the old sar-deep scored a literal 0/99 on Santos at every threshold.
+for H in s1deep-gibraltar s1warm-santos; do
+  python scripts/conf_sweep.py  --train-dir data/training_sar --holdout "$H" \
+      --fp-scene  s1deep-fujairah --imgsz 1024
+  python scripts/eval_holdout.py --train-dir data/training_sar --holdout "$H" \
+      --fp-scenes s1deep-fujairah --imgsz 1024 --conf <swept>
+done
 
 # Step 10a (P3 ingest): stream live AIS from AISStream.io over a bbox/MPA and normalize it into
 # the AIS contract file the matcher reads (needs AISSTREAM_API_KEY; --dry-run needs neither key nor net)

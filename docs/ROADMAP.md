@@ -1,7 +1,12 @@
 # ROADMAP — improving the detector & building the MPA-violation product
 
-_Snapshot: **2026-08-01** (verified against code, not memory). The forward plan. Written to be read
-**cold**, with no prior conversation context._
+_Snapshot: **2026-08-04** (verified against code and against real eval runs, not memory). The forward
+plan. Written to be read **cold**, with no prior conversation context._
+
+> **Last session (2026-08-03/04) closed W2, W3-A, W6, W7 and W8, and removed W9.** The headline is
+> **`sar-deep3` promoted** — the first SAR result that is statistically decisive rather than
+> noise-band, because the gate finally has two regions. Start at **"THE WORK QUEUE"** below; the
+> per-item "outcome" boxes carry what was measured and why.
 
 **Read in this order:**
 1. **`docs/STATUS.md`** — live model, per-run eval numbers, model progression, open problems.
@@ -93,23 +98,31 @@ the **traps**._
 **Legend:** 🏠 = needs the user's machine (GPU / human review / credentials) · 🟢 = buildable in any
 sandbox, no credentials.
 
-**Status in one line: the buildable backlog is now EMPTY.** All AUDIT P1/P2 findings are closed,
-Phase 3's definition of done is met, the three offline product stages (`ais_fishing.py`,
-`geofence_ais.py`, `alert_violations.py`) landed 2026-07-29, **W5 closed 2026-08-03**, and **W7 + W8
-closed 2026-08-03**. What remains is **data work** that needs a GPU and a human labelling chips — the
-loop is proven, it just has to be turned.
+**Status in one line: W1–W9 are all closed or removed. Three things remain: W10, W4, and W3-B.**
+All AUDIT P1/P2 findings are closed, Phase 3's definition of done is met, both detectors are promoted
+at swept operating points, and the SAR gate now spans two regions.
 
-**Start with W2.** W1 is done and refuted its own premise (optical data no longer lifts Kornati
-recall), W5 is done and cleared W2's blocker, W7 is done and found its own question unanswerable with
-free Sentinel data, W8 is done, and W4 was downgraded by W1's precision side-effect. The two items
-that still move the product are **W2 (SAR)** and **W3 (live AIS loop)** — both structural.
+**Start with W10** — it is the only item that is both cheap (~10 min of GPU) and unambiguously
+worthwhile: the W6 despeckle measured a 63% false-alarm cut but could not be *confirmed* on the old
+one-region gate, and that gate is now 5× thicker. Then **W4** (optical hard negatives) or **W3-B**
+(full fusion), both of which need more of your time than machine time.
+
+**What was learned last session that changes the plan:**
+- **The gate, not the model, was the binding constraint on SAR** — and fixing it immediately turned an
+  unprovable result into a decisive one. Prefer widening a gate over tuning a model when the CI is
+  wide enough to hide the effect you are chasing.
+- **Two roadmap items dissolved on contact with measurement** (W6's 1–5 px premise, W7 entirely).
+  Check whether the question is answerable with the data on hand *before* building the experiment.
+- **Optical is at the 10 m GSD floor** (W1, 2026-08-02) and further optical harvesting is a
+  precision/coverage tool, not a recall lever.
 
 | # | Item | Attacks | Effort | Blocker |
 |---|---|---|---|---|
 | ~~**W1**~~ | ~~Adriatic optical scenes → retrain → re-gate~~ | recall (Kornati gap) | — | ✅ **RUN 2026-08-02 — see "W1 outcome" below. Bought precision, NOT recall.** |
 | ~~**W2**~~ | ~~SAR region diversity **or** xView3 transfer~~ | SAR generalization | — | ✅ **DONE 2026-08-04 — `sar-deep3` PROMOTED at conf 0.10. Gibraltar P 0.367→0.545, Santos 0.000→0.424 (CIs disjoint). See "W2 outcome".** |
-| **W3** ⬅ **path A done** | Live operational loop over a trafficked MPA | product proof | S–M | ✅ **Path A RAN LIVE 2026-08-03/04** — 17 reserves geofenced, 1 event, GFW-corroborated (see "W3 outcome"). **Path B (fusion vs a fresh overpass) still open** — needs an acquisition inside the capture window |
-| **W4** | O3 same-region hard negatives | precision | M | 🏠 — **downgraded**: W1 already delivered a ~45% open-water FP cut |
+| **W3-B** | Full fusion vs a fresh overpass (path A ✅ done) | product proof | S–M | 🏠 **Path A RAN LIVE 2026-08-03/04** — 17 reserves geofenced, 1 event, GFW-corroborated (see "W3 outcome"). **Path B needs an acquisition inside the AIS capture window** |
+| **W4** | O3 same-region hard negatives | optical precision | M | 🏠 review — **downgraded**: W1 already delivered a ~45% open-water FP cut |
+| **W10** ⬅ **start here** | Re-run the W6 despeckle A/B on the 2-region gate | SAR precision | **S** | 🏠 GPU only (~10 min). No review needed — see "W10" below |
 | ~~**W5**~~ | ~~`eval_holdout.py --train-dir` (SAR gating harness)~~ | trust / unblocks W2 | — | ✅ **DONE 2026-08-03 — see "W5 outcome" below. W2's blocker is cleared, and the SAR gate turned out weaker than recorded.** |
 | ~~**W6**~~ | ~~S6 speckle-filter A/B~~ | SAR precision/recall | — | ✅ **RAN 2026-08-03/04 — see "W6 outcome". Peak-preserving despeckle: same recall, −63% false alarms, recall ceiling 0.70→0.87. Plain Lee is a trap (ceiling 0.70→0.39). Not promoted — fold into W2.** |
 | ~~**W7**~~ | ~~S7 cross-modality S1×S2 check~~ | trust | — | ✅ **RAN 2026-08-03 — see "W7 outcome" below. Not answerable as posed: S1/S2 orbits guarantee a ≥4.4 h gap. Georeferencing agreement WAS confirmed.** |
@@ -117,7 +130,58 @@ that still move the product are **W2 (SAR)** and **W3 (live AIS loop)** — both
 
 ---
 
-## W1 — Close the Kornati gap (Adriatic optical data) 🏠 **← start here**
+## W10 — Re-run the despeckle A/B on the 2-region gate 🏠 **← start here**
+
+**Why.** W6 measured that a **peak-preserving Lee despeckle cuts open-water false alarms 63% at
+matched recall** — but on the *old* one-region gate (23 boxes / 15 distinct vessels, recall CI ±0.2)
+that could not be confirmed, and IoU-mAP50 moved the opposite way. The gate is now **122 boxes across
+two regions**, which is exactly the thickness that was missing. This is the cheapest open item in the
+file: no fetching, no review, ~10 minutes of GPU. It either confirms a real precision win or kills the
+idea for good.
+
+**It matters most for the residual problem `sar-deep3` still has:** 1.86 FP/chip on Santos at the
+deploy point. Despeckling targets precisely that.
+
+```bash
+# 1. Build the despeckled tree (labels are geometric -> copied unchanged)
+python scripts/sar_despeckle.py --src data/training_sar --dst data/training_sar_peak   # --mode peak default
+# 2. Train with the SAME recipe sar-deep3 used, so the only variable is the filter
+python scripts/train.py --weights data/training/yolov8n-p2.yaml --pretrained yolov8n \
+    --data data/training_sar_peak/config.yml --imgsz 1024 --batch 4 \
+    --mosaic 0.5 --close-mosaic 15 --epochs 30 --name sar-peak
+# 3. Sweep BOTH holdouts (--holdout takes ONE scene — loop it, or you gate on Gibraltar alone and
+#    repeat the exact mistake that hid sar-deep's total blindness on Santos)
+for H in s1deep-gibraltar s1warm-santos; do
+  python scripts/conf_sweep.py --train-dir data/training_sar_peak --holdout "$H" \
+      --fp-scene s1deep-fujairah --imgsz 1024 --weights data/training/runs/sar-peak/weights/best.pt
+done
+# 4. Gate at the swept conf, both holdouts. Pass --old/--new EXPLICITLY: a despeckled tree is not in
+#    PROMOTED_BY_TREE, and resolve_weights only accepts an explicit path for an unregistered tree.
+for H in s1deep-gibraltar s1warm-santos; do
+  python scripts/eval_holdout.py --train-dir data/training_sar_peak --holdout "$H" \
+      --fp-scenes s1deep-fujairah --imgsz 1024 --conf <swept> \
+      --old data/training/weights/best_sar.pt --new data/training/runs/sar-peak/weights/best.pt
+done
+```
+
+**Acceptance:** FP/chip drops on **both** holdouts at matched-or-better recall, and the Santos recall
+CI does not fall below `sar-deep3`'s [0.33, 0.51]. Compare against the incumbent numbers in "Where we
+are" above.
+
+**Traps:**
+- **The comparison is not apples-to-apples unless each model is gated on its own preprocessing.**
+  `sar-deep3` must be measured on `data/training_sar`, the candidate on `data/training_sar_peak`. The
+  filter is part of the model.
+- **Promoting means a pipeline change, not a weights swap.** Inference must despeckle exactly as
+  training did. Nothing enforces this yet — `detect_boats.py` has no despeckle flag, so adopting it
+  means either writing despeckled chips in `providers/s1.py` or adding that flag. Decide before
+  promoting, not after.
+- `--mode lee` is a **measured trap** (recall ceiling 0.696→0.391). Use the default `peak`.
+- The despeckled trees are **gitignored** — reproducible from `sar_despeckle.py`, not committed.
+
+---
+
+## W1 — Close the Kornati gap (Adriatic optical data) 🏠 *(done — kept for the record)*
 
 **Why.** Kornati is the sharpest number in the repo: **R 0.51 / P 0.57** versus 0.80 on Alonnisos.
 It is a *cross-region* small-vessel holdout and the model has **zero Adriatic/karst-coast data in

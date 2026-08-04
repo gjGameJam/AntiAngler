@@ -228,6 +228,17 @@ positives change the FP mix, so negatives mined first would target a distributio
 Do not expect SAR to match optical on small artisanal boats — C-band barely returns them. Budget for
 speckle + coastal clutter as the dominant FP sources.
 
+> ## ✅ **SUPERSEDED 2026-08-04 — the generalization problem is largely SOLVED (ROADMAP W2).**
+> `best_sar.pt` = **`sar-deep3`**, promoted at a swept **conf 0.10**, trained on **5 region families**
+> after reviewing 3 staged regions (santos/kaohsiung/suezgulf → 160 boxes + 92 hard-negatives).
+> **Santos is held out as a SECOND TEST region**, so the gate is **84 chips / 122 boxes**, not 35 / 23.
+> Gibraltar **P 0.545 / R 0.522 / mAP50 0.415** (was 0.367 / 0.478 / 0.335); Santos **P 0.316 /
+> R 0.424** where `sar-deep` scored a literal **0/99 at every conf including 0.05** — region
+> brittleness at the floor, which the one-region gate had hidden. The Santos recall CIs old-vs-new are
+> **disjoint**: the first SAR result that is not inside the noise band. Residual: **1.86 FP/chip** on
+> Santos, which is what **W10** (the S6 despeckle re-run) targets. Full write-up: `ROADMAP.md` →
+> "W2 outcome". **The block below is the 2026-08-01/03 record, kept because its diagnosis was right.**
+>
 > **Status 2026-08-01.** `best_sar.pt` = **`sar-deep`** (promoted 2026-07-26): P2 arch, `yolov8n`
 > backbone transfer, 30 epochs in 76 s on the RTX 4070, trained on 149 chips / 206 vessel boxes / 112
 > hard-negatives from **one region-family** (Fujairah / Gibraltar / Hormuz — warm, deep, Gulf-like).
@@ -285,16 +296,35 @@ speckle + coastal clutter as the dominant FP sources.
   a real SAR eval set. Use xView3 val for the transfer number and the real scene for the honest
   deployment number.
 
-### S6 — Speckle filtering A/B
-- Try Lee/Refined-Lee before tiling; measure recall on 1-5 px targets both ways — speckle filters can
-  smooth away the very targets we want. Keep only if it helps.
+### S6 — Speckle filtering A/B ⚠️ **RAN 2026-08-03/04 (ROADMAP W6) — half right**
+- ~~measure recall on 1-5 px targets both ways~~ **Not measurable:** SAR TEST boxes are min **12 px**,
+  median 17.9 px, **zero below 11 px**. The 1–5 px stratum is an *optical* 10 m-GSD construct.
+- **Domain matters and the obvious filter is wrong.** Speckle is multiplicative in linear power but
+  approximately **additive** after `s1.py`'s dB stretch, so Lee's **local-statistics (additive)** form
+  is correct; the multiplicative variant is mis-specified. Shipped as `scripts/sar_despeckle.py`.
+- **Plain Lee is a TRAP** — best pixel contrast of anything tried (**+41%**) and the worst detection
+  (recall ceiling 0.696→**0.391**). **Peak-preserving** Lee (smooth background, never touch a compact
+  target's peak) gave **−63% open-water false alarms at matched recall**, ceiling 0.696→**0.870**.
+- **Lesson beyond SAR: pixel contrast ANTI-predicted detection** — the two ranked in opposite order
+  across three variants. Measure detection, not SNR.
+- **Not promoted** (the then-thin gate could not confirm it). → **ROADMAP W10** re-runs it on the new
+  2-region gate; that is now the top open SAR item.
 
-### S7 — Cross-modality validation
-- Run `best_sar.pt` on the S1 chips and compare against the optical detections over the same AOI (the
-  comparison harness from this session). Confirm SAR flags **large/dark vessels the optical missed under
-  cloud/night** — the whole point. Feeds Phase 3 fusion.
+### S7 — Cross-modality validation ❌ **RAN 2026-08-03 (ROADMAP W7) — NOT ANSWERABLE as posed**
+- Sentinel-2 crosses at ~10:30 local solar; Sentinel-1 at ~05:45 or ~18:00. Measured across all 10
+  paired AOIs the separation forms two clusters with **nothing between**: 4.42–4.70 h (S1 descending)
+  and 7.35–7.63 h (ascending). **~4.4 h is the floor and no date or AOI choice improves it** — a 12 kn
+  vessel moves ~98 km in that window, so per-vessel coincidence is undecidable for anything underway.
+- Measured anyway: Gibraltar 4/15 coincident within 200 m; Suez Gulf **0/7** (median nearest neighbour
+  2,813 m). Both are transit corridors — the worst possible choice.
+- **What it DID establish:** cross-modality georeferencing agrees to **23–175 m** across two sensors,
+  two CRSs and two providers — the first quantitative check of the `Provider` seam's geolocation.
+- **Re-scope options:** restrict to *stationary* vessels (an anchorage AOI), or let **AIS arbitrate**
+  (for a vessel transmitting at both overpass times the position at each is known, so "did each
+  modality see it" becomes answerable) — folding S7 into the Phase-3 machinery instead of imagery.
 
-**Recommended SAR sequence:** S1 + S2 (foundational) → S3 → S4 → S5 → S6 → S7.
+**Recommended SAR sequence:** S1 + S2 (foundational) → S3 → S4 → S5 → ~~S6~~ → ~~S7~~ — **S1/S2's
+"more regions" step is done (W2), S6 is measured and awaiting the W10 re-run, S7 is closed.**
 
 ---
 

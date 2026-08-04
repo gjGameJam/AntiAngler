@@ -1,23 +1,24 @@
 # STATUS — boat detector / active-learning loop
 
-_Snapshot: **2026-08-03** (W5 shipped: the eval harness is now modality-agnostic and gates SAR — which
-promptly showed `best_sar.pt` has no usable operating point. Previous cycle: W1 Adriatic,
-`finetune-adriatic` promoted at **conf 0.20**). Point-in-time; verify against code before trusting
-specifics._
+_Snapshot: **2026-08-04**. Last session closed **W2, W3-A, W6, W7, W8** and removed W9. Headline:
+**`sar-deep3` promoted at conf 0.10** on a gate that now spans **two** SAR regions — the first SAR
+result that is statistically decisive rather than inside the noise band. Point-in-time; verify against
+code before trusting specifics._
 
 This tracks the live state of the satellite ship-detection model and its active-learning
 loop. For the build spec + data contracts see `PIPELINE.md`; for known antipatterns see
 `AUDIT.md`; for the daily GFW/WDPA streams see `../CLAUDE.md`.
 
 **➡ For what to do next, read `ROADMAP.md` → "THE WORK QUEUE"** — it carries the prioritized items
-(W1–W8) with exact commands, acceptance tests and traps, plus a **"Do not re-attempt"** table of
+(W1–W10) with exact commands, acceptance tests and traps, plus a **"Do not re-attempt"** table of
 measured dead ends. This file is the *state*; that one is the *plan*.
 
 ---
 
 ## TL;DR — current state
 
-- **Live model:** `data/training/weights/best.pt` = the **`finetune-adriatic`** run (promoted **2026-08-02**), **deployed at `imgsz 1024`, `conf 0.20`** — the P2 arch warm-started from `finetune-diverse` after the **W1 Adriatic harvest** (3 in-class scenes: Šibenik/Primošten + Hvar/Pakleni + Göcek/Fethiye, **1093 boat boxes**, train 2512→2725). ⚠️ **The deploy conf moved DOWN 0.25→0.20**, reversing the previous two promotions' +0.05 pattern — this model is more conservative per-box, and judging it at the inherited 0.25 understates it badly (Kornati R 0.468 @0.25 vs **0.590 @0.20**). **What it bought was precision, not recall:** open-water false alarms −45% (1.43→0.79 dets/chip @0.20), base mAP50 0.614→**0.640** (no forgetting), Kornati weakly dominating the old deploy point. What it did **not** buy: any lift in the Kornati recall *ceiling* — see the W1 outcome box in `ROADMAP.md`. Backup of the outgoing model: `best_finetune-diverse.pt`.
+- **Live SAR model:** `data/training/weights/best_sar.pt` = **`sar-deep3`** (promoted **2026-08-04**, ROADMAP W2), **deployed at `imgsz 1024`, `conf 0.10`** — the first *swept* SAR operating point. Trained on 5 region families with **Gibraltar AND Santos held out**; the SAR gate is now **84 chips / 122 boxes** across two regions instead of 35 / 23 across one. Gibraltar **P 0.545 / R 0.522** (was 0.367 / 0.478), Santos **P 0.316 / R 0.424** — where the outgoing `sar-deep` scored a literal **0/99 at every conf including 0.05**. Combined test mAP50 0.072→**0.277**, base recall 0.098→**0.418**, open-water probe 31.6→**19.1** dets/chip. The Santos recall CIs old-vs-new are **disjoint** — unlike every prior SAR decision, this one is not noise. Backup: `best_sar_deep.pt`. ⚠️ Still noisy on a fresh region (**1.86 FP/chip** on Santos), so review remains the quality gate → see **W10**.
+- **Live optical model:** `data/training/weights/best.pt` = the **`finetune-adriatic`** run (promoted **2026-08-02**), **deployed at `imgsz 1024`, `conf 0.20`** — the P2 arch warm-started from `finetune-diverse` after the **W1 Adriatic harvest** (3 in-class scenes: Šibenik/Primošten + Hvar/Pakleni + Göcek/Fethiye, **1093 boat boxes**, train 2512→2725). ⚠️ **The deploy conf moved DOWN 0.25→0.20**, reversing the previous two promotions' +0.05 pattern — this model is more conservative per-box, and judging it at the inherited 0.25 understates it badly (Kornati R 0.468 @0.25 vs **0.590 @0.20**). **What it bought was precision, not recall:** open-water false alarms −45% (1.43→0.79 dets/chip @0.20), base mAP50 0.614→**0.640** (no forgetting), Kornati weakly dominating the old deploy point. What it did **not** buy: any lift in the Kornati recall *ceiling* — see the W1 outcome box in `ROADMAP.md`. Backup of the outgoing model: `best_finetune-diverse.pt`.
 - _(superseded)_ `finetune-diverse` (promoted 2026-07-26, was **`conf 0.25`**) — the P2 arch warm-started from `finetune-bigship` after the **13-set label harvest** (11 new reviewed scenes folded into TRAIN: Lofoten, Curaçao, SB-Channel lanes, Anacapa, Santos, Kaohsiung, Jebel Ali, Suez ×2, Durban, False Bay; train 659→2,512 images with `--max-neg-ratio 1.0` guarding the reef counter-lesson). ⚠️ `detect_boats.py`'s defaults **no longer** bake this in — since 2026-08-02 they are `finetune-adriatic`'s (`conf 0.20`, imgsz 1024). Backups: `best_finetune-bigship.pt` (prior live), `best_finetune-smallvessel.pt`, `best_finetune-openocean.pt`, `best_finetune-p2-1024.pt`, `best_finetune-aug-1024.pt`, `best_finetune-aug-640.pt`, `best_multiscene.pt`, `best_baseline_pre-multiscene.pt` (see the Model progression table).
 - **Kornati (Adriatic) is the 2nd small-vessel holdout — and it broke the 0.67 story (2026-07-26).** Fresh never-trained region, 16 chips / **156 human boxes**: the then-live `finetune-bigship` scored only **P 0.73 / R 0.37** (CI [0.30, 0.45]) — the Alonnisos 0.67 does **not** transfer cross-region (open problem #4 was right to worry). `finetune-diverse` lifted it to R 0.51 @0.25 (CI [0.42, 0.60]); the live `finetune-adriatic` reaches **R 0.590 / P 0.558 @0.20** (CI [0.50, 0.68]). ⛔ **The "durable lever is more Adriatic/karst-coast data" reading was TESTED AND REFUTED by W1 (2026-08-02)** — 1093 fresh in-class boxes across 3 scenes and 3 training schedules moved aggregate 4-holdout F1 by ±0.002 and left the recall *ceiling* flat (0.904→0.891). Kornati R ~0.5–0.6 at usable precision is the **10 m GSD floor**. Kornati stays a pure holdout (no Adriatic scene in TEST's region is in TRAIN). **Do not spend another optical review cycle here expecting recall** — go structural (SAR W2 / AIS W3).
 - **The whole in-repo active-learning loop works** end-to-end: `sat_fetch → detect_boats → review_server → export_labels → build_dataset → train → promote → rescan`.
@@ -27,7 +28,8 @@ measured dead ends. This file is the *state*; that one is the *plan*.
 - **Alonnisos holdout relabeled (2026-07-16) — trustworthy baseline.** Full human re-review: **76 boats** (was 49 — a ~55% undercount). Corrected labels in TEST via `build_dataset.py --holdout-scene fallbacktest portsaid alonnisos`. This is the honest baseline O3 (hard negatives) is measured against — many earlier "FPs" were real unlabeled boats.
 - **Sentinel-1 SAR (Phase 2) — provider built + validated on real chips; first training set exists; full train pending.** `--provider s1` (RTC, dB-percentile pseudo-RGB `[VV,VH,VV/VH]`) validated on a real Fujairah fetch (2026-07-15: backscatter blobs coincide with optical detections, and SAR finds vessels optical missed). The classical **`sar_seed.py`** (dual-pol geo-mean + adaptive `median+k·MAD` + water/depth gates) + human review over deep-water runs (Fujairah/Gibraltar/Hormuz) yielded the **first SAR training set** — `data/processed/sar_training_exports/deep/`: **149 chips / 206 vessel boxes / 112 empty hard-negatives**. **`best_sar.pt` TRAINED + PROMOTED 2026-07-26** (`runs/sar-deep`, first GPU train — 30 epochs in 76 s): P2 arch, `yolov8n` backbone transfer (never the optical `best.pt`), `data/training_sar/` (train 48/val 26/test 35, `s1deep-gibraltar` held out). Honest test-split numbers (includes the reviewed Gibraltar holdout): **P 0.392 / R 0.478 / mAP50 0.335** — a thin-data first model; it replaces `sar_seed.py` as the SAR review loop's starting detector (`detect_boats.py --weights data/training/weights/best_sar.pt` on S1 runs). **Next: grow the thin set** (more Fujairah-class deep-anchorage scenes through seed/detect → review → export → retrain), then S6 speckle A/B + S7 cross-modality, and the xView3 transfer (S1/S2) as the big lever. **2026-07-26 update:** a fresh Singapore Strait S1 scene was reviewed (**267 vessel boxes over 18 chips** — `sar_training_exports/singapore/`; notably `best_sar.pt` scored **0 hits at conf 0.15** there, so the classical `sar_seed.py --water-only --min-depth 12` seeded the review — the per-scene dB stretch means each new region is out-of-domain for the thin model). The retrain **`sar-deep2` was NOT promoted**: Gibraltar-gate P 0.392→0.285 / R 0.478→0.435 / mAP50 0.335→0.298 (regression; though the gate is thin — 23 test boxes — so noise is large). Singapore data stays in `data/training_sar` TRAIN/VAL for the next round; the conclusion stands that SAR needs *more regions* (or xView3 transfer) before another gate attempt, not one more scene. **⚠️ 2026-08-03 (W5) — the SAR gate is now measurable, and it downgraded the model.** `eval_holdout.py --train-dir data/training_sar` reproduces the P 0.392 / R 0.478 / mAP50 0.335 above **exactly**, but `conf_sweep.py` shows that pair is the **conf ≈0.10** point: F1 peaks at only **0.415** there, the in-sample Fujairah probe fires **24.9 dets/chip**, pushing conf to 0.25 collapses recall to 0.217, the recall ceiling is ~0.70 (conf 0.05), and the 90% recall CI is **[0.27, 0.67]** on 23 boxes. So (a) `best_sar.pt` has **no swept deploy conf and no usable operating point** — unlike every optical model, which is always quoted at one; (b) the `sar-deep2` reject really was within noise; (c) all 23 SAR GT boxes are **>5 px**, so the 1-2px/3-5px strata are empty and say nothing on this modality. See open problems #8/#10.
 - **Gulf-of-Finland S2 dataset TRAINED + PROMOTED (2026-07-26, `finetune-bigship`).** The feared ~71% Baltic small-craft dominance did **not** regress the warm-water holdouts — it transferred: at the old deploy conf-equivalents, **Alonnisos** leapt (see deploy bullet), **Port Said** recall nudged up at near-perfect precision, **Singapore** improved (P 0.773→0.864, R 0.654→0.731 @0.25), base-test mAP50 0.629→0.645 (no forgetting). ⚠️ The one regression signal: the **False Bay open-water FP probe jumped 7→34 raw dets @0.25** (in-TRAIN, directional) — same-region open-water hard negatives (O3) are the follow-up if fresh-scene FP/chip climbs. GPU makes retrains ~25 min end-to-end.
-- **Next levers, in impact order** *(rewritten 2026-08-03 — the old "scale the optical data loop" ordering is obsolete)*: (1) **W2 — SAR regions or xView3 transfer**: `best_sar.pt` is one region-family thin and has no usable operating point; the W5 gate is now in place to judge a candidate. (2) **W3 — the live AIS loop**: path A (`aisstream_fetch → ais_fishing → geofence_ais → alert_violations`) needs only `AISSTREAM_API_KEY` — no imagery, no overpass timing — and is the fastest real product proof. (3) Everything optical is at the **10 m GSD floor**; W1 measured that more in-class data no longer buys recall, so treat further optical harvesting as a precision/coverage tool, not a recall lever. See `docs/ROADMAP.md` → THE WORK QUEUE.
+- **Next levers, in impact order** *(rewritten 2026-08-04; W2 and W3-A are now done)*: (1) **W10 — re-run the W6 despeckle A/B on the new 2-region gate.** ~10 min of GPU, no review, no fetching; W6 measured a 63% false-alarm cut that the old thin gate could not confirm, and it targets exactly `sar-deep3`'s residual 1.86 FP/chip on Santos. (2) **W4 — optical hard negatives** (needs review). (3) **W3-B — full fusion** against an overpass inside an AIS capture window. Everything optical is at the **10 m GSD floor**; W1 measured that more in-class data no longer buys recall, so treat further optical harvesting as a precision/coverage tool, not a recall lever. See `docs/ROADMAP.md` → THE WORK QUEUE.
+- **The transferable lesson from 2026-08-04:** the **gate**, not the model, was the binding constraint on SAR. Widening TEST from one region to two turned an unprovable result into a decisive one *and* exposed that the incumbent was totally blind out-of-region — something a one-region gate had hidden for weeks. When a CI is wide enough to hide the effect you are chasing, widen the gate before tuning the model.
 
 ---
 
@@ -218,32 +220,29 @@ See `ROADMAP.md` → "W7 outcome".
 
 ## Recommended next steps
 
-**Everything runnable is run — and as of 2026-08-02, W1 is closed too.** Phase 3 is live-validated
-end-to-end, the GPU is unlocked, all AUDIT P1/P2 findings are closed, and the W1 Adriatic cycle ran to
-a promotion. **The headline change to the plan: more optical data is no longer the top lever.** W1
-proved the Kornati recall ceiling is the 10 m GSD floor, not a data gap, so the queue's centre of
-gravity moves to the structural items — **W2 (SAR)** and **W3 (live AIS loop)** — with **W4 downgraded**
-(its precision target was largely met as a W1 side effect).
+**W1–W9 are all closed or removed; three items remain.** Phase 3 is live-validated end-to-end
+(including the live operational loop), the GPU is unlocked, all AUDIT P1/P2 findings are closed, both
+detectors are promoted at swept operating points, and the SAR gate spans two regions.
 
 **The full queue with commands, acceptance tests and traps lives in `ROADMAP.md` → THE WORK QUEUE.**
 Summary in impact order:
 
-1. ~~**W1 — Attack the Kornati gap**~~ ✅ **DONE 2026-08-02.** Ran in full (3 scenes / 1093 boxes /
-   3 schedules); `finetune-adriatic` promoted at conf 0.20 for a ~45% false-alarm reduction. The recall
-   premise was **refuted** — Kornati's ceiling is GSD, not data. Full write-up in `ROADMAP.md` → "W1
-   outcome". **Do not repeat this cycle expecting recall.**
-2. **W2 — SAR needs regions, not one more scene.** `sar-deep2` (+Singapore) regressed the Gibraltar
-   gate → next attempt only after 2+ more reviewed deep-water regions, or the xView3 transfer.
-   `best_sar.pt` = `sar-deep` unchanged; it scores **0 on unseen regions** (per-scene dB stretch), so
-   seed new SAR reviews with `sar_seed.py --water-only --min-depth 12`. **W5 is done, so the gate is
-   ready** — and it showed the incumbent is weaker than recorded (no usable operating point, CI
-   [0.27, 0.67]; open problems #8/#10). Two consequences: a `sar-deep3` has a low bar to clear, and
-   clearing it proves less than it looks. **Prioritise a second reviewed region in TEST**, which fixes
-   the model *and* the gate's power at once.
-3. **W3 — Operational mode.** The **AIS-only** loop (`aisstream_fetch` → `ais_fishing` →
-   `geofence_ais` → `alert_violations`) needs *only* `AISSTREAM_API_KEY` — no imagery, no overpass
-   timing — so it is now the fastest path to a live result. The full fusion variant additionally needs
-   a fresh overpass inside the AIS capture window.
+1. **W10 — re-run the W6 despeckle A/B on the 2-region gate.** ⬅ **start here.** The cheapest open
+   item: **~10 min of GPU, no review, no fetching.** W6 measured that a peak-preserving Lee despeckle
+   cuts open-water false alarms **63% at matched recall**, but the old one-region gate (23 boxes,
+   CI ±0.2) could not confirm it and IoU-mAP50 moved the other way. The gate is now 5× thicker, and
+   this targets exactly `sar-deep3`'s residual **1.86 FP/chip on Santos**. Filter ships as
+   `scripts/sar_despeckle.py`. ⚠️ Promoting it is a **pipeline change**, not a weights swap —
+   inference must despeckle exactly as training did, and nothing enforces that yet.
+2. **W4 — optical hard negatives** (needs chip review). Downgraded: W1 already delivered most of the
+   precision win it targeted. Watch signals are Kornati FP/chip and the open-water probes.
+3. **W3-B — full fusion.** Path A ran live 2026-08-03/04. Path B additionally needs a fresh overpass
+   whose `scene.datetime` falls inside the AIS capture window — the whole difficulty, since AISStream
+   is live-only. W8's reconnect makes a multi-hour rolling buffer survivable, so this is now practical.
+
+**Also staged but unreviewed:** `s1warm-jebelali` (56 chips, 163 seed dets) — deprioritised only
+because it is the same Gulf region family as Fujairah/Hormuz. Two runs seeded ~nothing and are not
+worth review time: `s1warm-rastanura` (0 dets) and `s1warm-durban` (1).
 4. ~~**W5 — `eval_holdout.py --train-dir`**~~ ✅ **DONE 2026-08-03.** Both eval scripts are now
    modality-agnostic (`--train-dir`, `PROMOTED_BY_TREE`), zero-match holdouts and zero-chip FP probes
    are hard errors / warnings instead of silent zeros, and `ultralytics` is lazy-imported so the gate's
@@ -298,6 +297,20 @@ export REQUESTS_CA_BUNDLE="$CA" SSL_CERT_FILE="$CA" CURL_CA_BUNDLE="$CA" GDAL_HT
 venv/Scripts/python.exe scripts/sat_fetch.py --bbox <minLon minLat maxLon maxLat> \
     --min-coverage 0.6 --label <slug> --insecure-tls
 ```
+
+**`git push` also hits the Avast TLS wall** (found 2026-08-04). `git` fails with
+`SSL certificate ... unable to get local issuer certificate` exactly like the Python HTTPS calls. Point
+git at the same bundle — do **not** disable verification:
+```bash
+export GIT_SSL_CAINFO="$PWD/scratch_logs/ca_avast_bundle_2026-08.pem"   # one-shot
+git config --global http.sslCAInfo "C:/gtest/AntiAngler/scratch_logs/ca_avast_bundle_2026-08.pem"  # persistent
+```
+⚠️ The bundle goes **stale when Avast rotates its root** — then every HTTPS call, git included, starts
+failing with that same message. Regeneration recipe above; do not hardcode a thumbprint.
+
+**Branch state (2026-08-04):** the session's work is on **`sar-deep3-and-roadmap-closeout`**, pushed to
+origin but **not merged to `main`**. Four commits: W8 code, W6 despeckle, W2 model promotion + data,
+docs closeout. Merge or open a PR before starting new work, or branch from it.
 
 **Re-apply the scene-aware holdout after any `build_dataset.py`** (moves the SG-Jul5 `fallbacktest` chips to TEST, all other AL chips to TRAIN):
 ```python
