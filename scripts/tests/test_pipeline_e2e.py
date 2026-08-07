@@ -1,4 +1,4 @@
-"""End-to-end P3 contract test over COMMITTED fixtures (ROADMAP / PHASE3_PLAN 4A).
+"""End-to-end P3 contract test over COMMITTED fixtures (ROADMAP / P3 workstream 4A).
 
 Unlike the per-module tests (which build inputs in temp dirs), this runs the fusion + GFW-enrichment
 chain over the checked-in `scripts/tests/fixtures/` and asserts the exact `violation_events.json`

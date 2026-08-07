@@ -143,7 +143,7 @@ class TestInsights(unittest.TestCase):
 
 
 class TestRegionFiltering(unittest.TestCase):
-    """MPA-specific fishing_probability (PHASE3_PLAN 3A) — client-side position filtering."""
+    """MPA-specific fishing_probability (P3 workstream 3A) — client-side position filtering."""
 
     def test_point_in_bbox(self):
         bbox = (24.9, 36.9, 26.1, 38.1)

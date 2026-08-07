@@ -112,6 +112,26 @@ def despeckle_array(arr, window=7, mode="peak", peak_sigma=2.0):
     return np.clip(np.rint(out), 0, 255).astype(np.uint8)
 
 
+def despeckle_chip_chw(chip, opts):
+    """Despeckle a rasterio-order ``(C, H, W)`` uint8 chip from an ``opts`` dict; the INFERENCE entry point.
+
+    Lives here, next to the filter it wraps, so the train-time and inference-time paths are the same
+    code — `providers/s1.py` only delegates. That is deliberate: a model trained on despeckled chips
+    fed raw chips (or vice versa) throws no error and simply detects less. Measured cost of that
+    mismatch, W12: Gibraltar recall 0.609 -> 0.217.
+
+    ``opts`` keys: ``despeckle`` ("off"/"peak"/"lee"), ``despeckle_window``, ``despeckle_peak_sigma``.
+    Returns the SAME object when disabled, so "off" is a true no-op.
+    """
+    mode = (opts or {}).get("despeckle", "off")
+    if mode in (None, "off"):
+        return chip
+    hwc = np.transpose(chip, (1, 2, 0))          # (C,H,W) -> (H,W,C), the orientation training used
+    out = despeckle_array(hwc, window=(opts.get("despeckle_window") or 7), mode=mode,
+                          peak_sigma=(opts.get("despeckle_peak_sigma") or 2.0))
+    return np.ascontiguousarray(np.transpose(out, (2, 0, 1)))
+
+
 # --------------------------------------------------------------------------- IO
 
 def despeckle_image_file(src, dst, window, mode, peak_sigma):

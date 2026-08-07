@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "generated_utc": "2026-08-05T18:04:03Z",
+      "source_run": "2026-07-17T19-55-27Z_s1warm-durban",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 28,
+      "positive_chips": 3,
+      "negative_chips": 25,
+      "total_boxes": 7
+    }
+  ]
+}

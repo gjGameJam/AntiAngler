@@ -187,12 +187,15 @@ HTML_TEMPLATE = r"""<!doctype html>
   .bar { height: 6px; background: #2c313b; border-radius: 3px; width: 220px; overflow: hidden; }
   .bar > i { display: block; height: 100%; background: #3fb950; width: 0%; }
   main { display: flex; gap: 14px; padding: 14px; align-items: flex-start; }
-  #wrap { display: flex; gap: 10px; }
+  /* flex-end so a caption that wraps to 2 lines can't shove its canvas out of line with the others */
+  #wrap { display: flex; gap: 10px; align-items: flex-end; }
   .pane { margin: 0; }
   .pane figcaption { font-size: 12px; color: #93a1b0; line-height: 1.3; margin-bottom: 5px; max-width: 640px; min-height: 1.3em; }
   canvas { max-width: min(88vw, 88vh); border: 1px solid #2c313b; cursor: crosshair; touch-action: none; display: block; }
-  #wrap.dual canvas { max-width: min(43vw, 80vh); }
-  #cvc { cursor: default; }
+  /* Pane count is per-chip: label + clean always, + optical companion for SAR runs. */
+  #wrap.p2 canvas { max-width: min(43vw, 80vh); }
+  #wrap.p3 canvas { max-width: min(29vw, 74vh); }
+  #cvc, #cvn { cursor: default; }
   aside { width: 300px; }
   .card { background: #1c2027; border: 1px solid #2c313b; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
   button { font: inherit; padding: 7px 11px; border-radius: 6px; border: 1px solid #3a414d;
@@ -220,6 +223,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <main>
   <div id="wrap">
     <figure class="pane"><figcaption id="lblMain">chip</figcaption><canvas id="cv" width="640" height="640"></canvas></figure>
+    <figure class="pane" id="cleanPane"><figcaption>same chip, <b>no overlay</b> &mdash; boxes hide 1&ndash;5 px vessels, so scan for faint/small ships here</figcaption><canvas id="cvn" width="640" height="640"></canvas></figure>
     <figure class="pane" id="compPane" hidden><figcaption>optical &mdash; land reference (drawn from the paired S2 scene; ships differ by date, land does not)</figcaption><canvas id="cvc" width="640" height="640"></canvas></figure>
   </div>
   <aside>
@@ -249,6 +253,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         <li><b>Click</b> a detection box to cycle pending &rarr; correct &rarr; incorrect.</li>
         <li><b>Drag</b> on empty water to add a <i>missed</i> boat.</li>
         <li><b>Right-click</b> a drawn box to delete it.</li>
+        <li>Use the <b>clean pane</b> to hunt for boats the boxes cover up - at 10 m GSD a vessel
+            can be smaller than the box outline drawn over it.</li>
         <li>Mark reviewed only once <b>every</b> real boat is boxed and every box judged
             (no pending) - this "complete labels" rule is what makes the export trainable.</li>
       </ul>
@@ -264,6 +270,7 @@ let hasComp = false;
 
 const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 const cvc = document.getElementById("cvc"), ctxc = cvc.getContext("2d");
+const cvn = document.getElementById("cvn"), ctxn = cvn.getContext("2d");  // clean (no-overlay) pane
 const COLOR = { pending:"#e3b341", correct:"#3fb950", incorrect:"#f85149", missed:"#58a6ff" };
 
 async function api(path, opts) {
@@ -288,10 +295,15 @@ function loadChip(i) {
   tileSize = c.tile_size || 640;
   cv.width = tileSize; cv.height = tileSize;
   cvc.width = tileSize; cvc.height = tileSize;
+  cvn.width = tileSize; cvn.height = tileSize;
   hasComp = !!c.has_companion;
   document.getElementById("compPane").hidden = !hasComp;
-  document.getElementById("wrap").classList.toggle("dual", hasComp);
-  document.getElementById("lblMain").textContent = hasComp ? "SAR (VV / VH) — label on this side" : "chip";
+  // label + clean are always shown; the optical companion adds a third pane on SAR runs.
+  const wrap = document.getElementById("wrap");
+  wrap.classList.toggle("p2", !hasComp);
+  wrap.classList.toggle("p3", hasComp);
+  document.getElementById("lblMain").textContent =
+      hasComp ? "SAR (VV / VH) — label on this side" : "chip — label on this side";
   // Working set: saved review boxes if present, else detections seeded as pending.
   if (c.review && c.review.boxes) {
     boxes = c.review.boxes.map(b => ({...b}));
@@ -313,9 +325,10 @@ function loadChip(i) {
   draw();
 }
 
-function drawPane(c2, image) {
+function drawPane(c2, image, showBoxes) {
   c2.clearRect(0, 0, tileSize, tileSize);
   if (image && image.complete && image.naturalWidth) c2.drawImage(image, 0, 0, tileSize, tileSize);
+  if (showBoxes === false) return;  // clean pane: pixels only, nothing drawn over the vessels
   c2.lineWidth = 2; c2.font = "12px system-ui";
   for (const b of boxes) {
     const [x1, y1, x2, y2] = b.bbox_pixel;
@@ -326,6 +339,7 @@ function drawPane(c2, image) {
 
 function draw() {
   drawPane(ctx, img);
+  drawPane(ctxn, img, false);
   if (drag) {
     ctx.strokeStyle = COLOR.missed; ctx.setLineDash([5, 4]);
     ctx.strokeRect(drag.x0, drag.y0, drag.x1 - drag.x0, drag.y1 - drag.y0);

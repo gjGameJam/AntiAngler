@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "generated_utc": "2026-08-05T18:04:01Z",
+      "source_run": "2026-07-17T19-56-58Z_s1warm-jebelali",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 56,
+      "positive_chips": 14,
+      "negative_chips": 42,
+      "total_boxes": 36
+    }
+  ]
+}

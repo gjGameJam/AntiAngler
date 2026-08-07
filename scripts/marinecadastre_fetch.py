@@ -7,7 +7,7 @@ from pathlib import Path
 
 import _http  # stdlib-only at import time; lazy-imports requests inside build_session
 
-# The objective of this script (historical AIS ingestion, PHASE3_PLAN Workstream 3C):
+# The objective of this script (historical AIS ingestion, P3 workstream 3C):
 # - Normalize a NOAA MarineCadastre archive AIS CSV into the project's neutral AIS contract
 #   ({mmsi, lon, lat, timestamp, sog?, cog?}) that fuse_violations.py --ais reads
 # - Spatially filter to an AOI (--bbox / --wdpa-id) and optionally a time window (--start/--end),
@@ -46,7 +46,7 @@ def env_or(name, default):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description="Normalize a NOAA MarineCadastre archive AIS CSV into the AIS contract "
-                    "fuse_violations.py --ais reads, filtered to an AOI (PHASE3_PLAN 3C).")
+                    "fuse_violations.py --ais reads, filtered to an AOI (P3 workstream 3C).")
     p.add_argument("--csv", type=Path, nargs="*", default=None,
                    help="Local MarineCadastre AIS CSV file(s) to normalize (the here-runnable path).")
     p.add_argument("--date", default=env_or("MC_DATE", None),

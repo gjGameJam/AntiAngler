@@ -1,7 +1,12 @@
-"""Land/water mask for a sat_fetch run — the precision filter (improvement plan O1 / SAR S3).
+"""Land/water mask for a sat_fetch run — a precision filter.
 
-Detections on land (coastline, surf, buildings, bright bare ground) are the dominant optical
-false-positive class (see docs/IMPROVEMENT_PLAN.md). This builds a 10 m land/water mask over a
+Detections on land (coastline, surf, buildings, bright bare ground) are the most visually damaging
+optical false positives — often confident rock/islet hits at conf 0.6-0.7. ⚠️ They are NOT the
+dominant class: the 2026-07-16 audit classified all 110 FPs across three holdouts and found land is
+only **16%**, with **84% ON-water** and concentrated on small-vessel scenes. So this mask is a cheap
+partial win, not the main precision lever (that is same-region hard negatives and the AIS fusion
+join). See docs/ROADMAP.md -> "DO NOT RE-ATTEMPT" ("Masking land to fix optical precision").
+This builds a 10 m land/water mask over a
 run's AOI from **ESA WorldCover** (free on the same Planetary Computer STAC as the imagery, no
 credentials — class 80 = permanent water) and caches it as `water_mask.tif` in the run dir, so
 `detect_boats.py` can drop land detections offline (no repeated network call).

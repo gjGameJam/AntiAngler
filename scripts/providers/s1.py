@@ -166,3 +166,20 @@ class Sentinel1GrdProvider(Provider):
         params = {"mode": "sar-db-percentile", "pct": [lo_p, hi_p],
                   "db_lo": los, "db_hi": his, "composite": composite}
         return out, params
+
+    def postprocess_chip(self, chip, opts):
+        """Optionally despeckle each chip AFTER tiling — the inference half of ROADMAP W12.
+
+        A model trained on despeckled chips MUST see despeckled chips at inference, or it is
+        silently out of domain. `sar_despeckle.despeckle_array` is the *same* function that
+        built the training tree (`--src data/training_sar --dst data/training_sar_peak`), and
+        it is applied here at the same point in the pipeline: per chip, after tiling, with
+        nodata already zeroed by `scale_to_uint8`. That equivalence is the whole point — see
+        `Provider.postprocess_chip` for why a mosaic-level filter would NOT match.
+
+        Off unless `--despeckle` is passed, because the chips every existing SAR run and the
+        promoted `best_sar.pt` (`sar-deep4`) were built from are RAW.
+        """
+        from sar_despeckle import despeckle_chip_chw  # local: keeps provider import cheap
+
+        return despeckle_chip_chw(chip, opts)

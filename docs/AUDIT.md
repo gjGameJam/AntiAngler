@@ -46,6 +46,27 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 
 ## P2 — Medium (reliability & reproducibility)
 
+2b. **`build_dataset.py` purged layered files by FILENAME PATTERN, not provenance — train/val leak.**
+   ✅ **FIXED (2026-08-06).** `purge_al_files()` deleted only files whose name contained the `__`
+   marker from `<run>__<chip>`. That marker is a *convention of `export_labels.py`*, not a guarantee:
+   `ingest_s2ships_finland.py` writes `finlandS2_<tile><date>_r00_c02`, with no `__`. Those files
+   therefore survived every purge, while `split_stems()` (a seeded shuffle over the current stem set)
+   kept reassigning them as the set grew — so a chip assigned to `train` in one build and `val` in the
+   next existed in **both**. Measured at discovery: **510 of 1034 Finland chips duplicated across
+   train/val**, and `count_base()` (same pattern rule) miscounted them as untouched base photos, so
+   "base kept" reported 1452/650 instead of the true 434/124/63 = 621.
+   **Blast radius:** the holdout **TEST** split was never affected — it is populated by scene-name
+   filters over `__`-named chips — so every `eval_holdout.py`/`conf_sweep.py` number and every
+   promotion decision remains valid. What was contaminated is the **val** split YOLO uses for
+   best-epoch selection, from `finetune-bigship` (2026-07-26) through `finetune-adriatic`.
+   **Fix:** purge and count by **provenance** — `f.stem in al_stems`, where `al_stems` is every stem
+   collected from the export tags — with the `__` glob retained so stale files from a deleted tag are
+   still removed. **Lesson:** when a directory is rebuilt idempotently, the delete rule must be derived
+   from the same source of truth as the write rule; deriving it from a *naming convention* silently
+   breaks the moment a sibling ingester picks different names.
+   **Regression test:** `scripts/tests/test_build_dataset.py` (6 tests, pure stdlib) — the key case was
+   verified to FAIL against the pre-fix implementation before being committed to the suite.
+
 3. **`requirements.txt` doesn't cover steps 1–2** — ✅ **DONE (2026-07-23).** `pandas==3.0.5`,
    `geodatasets==2026.5.1`, `matplotlib==3.11.1` (imported by `prep_polygons.py` / `view_polygons.py`)
    are now pinned in `requirements.txt`; the pip resolver confirmed they co-resolve with the existing
@@ -72,17 +93,20 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
    - **`/vsicurl` COG reads:** `providers/_raster.py` `gdal_env()` now sets `GDAL_HTTP_MAX_RETRY=3` /
      `GDAL_HTTP_RETRY_DELAY=2` (both overridable per call), so a `sat_fetch` run — one STAC search + N
      SCL probes + a band read — survives a transient failure.
-   - **Not covered:** `aisstream_fetch.py` is a **websocket**, where "retry" means reconnect-and-resume
-     mid-capture. That changes capture semantics (duplicate positions across a reconnect, partial
-     windows) and is a design decision, not a transport setting, so it was deliberately left alone
-     rather than half-done. Still open if the live-capture operational mode needs it.
+   - **The websocket case — ✅ CLOSED 2026-08-03 (ROADMAP W8).** `aisstream_fetch.py` reconnects with
+     capped backoff (`reconnect_delay()`, 0/2/4/8s… capped at 30s) until a **wall-clock** deadline
+     fixed at entry — so an outage shortens the data collected rather than extending the capture,
+     which is what keeps a capture pairable with a known `scene.datetime`. The semantics question that
+     had deferred it was answered by *recording* what happened (`elapsed_s`, `connected_s`,
+     `reconnects`, `gaps`, `truncated`, `duplicates_dropped`) instead of silently claiming the full
+     window. `--no-reconnect` restores the old behaviour; an AISStream `error` frame still fails fast.
    - **Does NOT help** the Avast schannel partial-chain failure — that is a cert-store problem; use the
      CA-bundle + `--insecure-tls` recipe in `docs/STATUS.md`.
 
 5. **CI runs no lint/compile/test** — ✅ **DONE (2026-07-23).** `.github/workflows/tests.yml` runs on
    every push + PR: `python -m compileall -q scripts` (syntax gate for the whole repo, including the
    heavy ML/geo scripts — compileall parses, doesn't import) + `python -m unittest discover -s
-   scripts/tests` (the 203-test offline suite). Pure stdlib, no credentials/deps — free coverage. A
+   scripts/tests` (the offline suite, 280 tests as of 2026-08-06). Pure stdlib, no credentials/deps — free coverage. A
    syntax error in any script or a P3 regression now fails CI instead of shipping. (`ruff check` could
    be added later as an optional lint step.)
 
@@ -127,5 +151,5 @@ stage-2/3 and P3 scripts adopt the house style these findings established (`main
 #6 (`.env.example`) closed 2026-07-23; #1 (`main()` guards on all four scripts) and #2 (`prep_polygons`
 hardening) closed 2026-07-25; **#4 (network retry/backoff) closed 2026-07-29** via `scripts/_http.py` +
 the GDAL `/vsicurl` retry config, with the websocket (`aisstream_fetch.py`) reconnect case explicitly
-left open as a semantics decision rather than a transport setting. #7–#11 remain conscious house-style
-trade-offs; leave. These are also indexed under `docs/ROADMAP.md` → "Remaining TODO items".
+left open as a semantics decision — and then **closed 2026-08-03** (ROADMAP W8) by recording what the
+capture actually did rather than guessing. #7–#11 remain conscious house-style trade-offs; leave.

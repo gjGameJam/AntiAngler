@@ -144,6 +144,17 @@ def parse_args(argv=None):
                    help="Skip chips whose valid (non-nodata) fraction is below this.")
     p.add_argument("--max-bbox-deg", type=float, default=float(env_or("SAT_MAX_BBOX_DEG", 1.0)),
                    help="Reject an AOI whose lon or lat span exceeds this (guards against OOM).")
+    # --- Per-chip postprocessing (applied AFTER tiling; provider decides what it means) ---
+    p.add_argument("--despeckle", default=env_or("SAT_DESPECKLE", "off"), choices=["off", "peak", "lee"],
+                   help="SAR only (--provider s1): despeckle each chip after tiling. 'peak' is the "
+                        "peak-preserving Lee filter the despeckled SAR models were trained on; 'lee' is "
+                        "plain Lee, a MEASURED TRAP (W6: -45%% recall ceiling). Default off, because the "
+                        "promoted best_sar.pt and every SAR run on disk are RAW. ⚠️ Train and inference "
+                        "must use the SAME setting or the model is silently out of domain.")
+    p.add_argument("--despeckle-window", type=int, default=int(env_or("SAT_DESPECKLE_WINDOW", 7)),
+                   help="Despeckle filter window (must match training; the SAR tree used 7).")
+    p.add_argument("--despeckle-peak-sigma", type=float, default=float(env_or("SAT_DESPECKLE_PEAK_SIGMA", 2.0)),
+                   help="peak mode: leave pixels brighter than mean + this*sd untouched (training used 2.0).")
     # --- Output ---
     p.add_argument("--label", default=env_or("SAT_LABEL", None), help="Slug for the run directory name.")
     p.add_argument("--output-dir", type=Path,
@@ -402,10 +413,22 @@ def main(argv=None):
     chips_dir = tmp_dir / "chips"
     chips_dir.mkdir(parents=True, exist_ok=True)
 
+    # Per-chip postprocessing runs AFTER tiling (see Provider.postprocess_chip for why that
+    # placement is load-bearing, not incidental). Providers ignore keys they do not understand.
+    chip_postprocess = {"despeckle": args.despeckle,
+                        "despeckle_window": args.despeckle_window,
+                        "despeckle_peak_sigma": args.despeckle_peak_sigma}
+    if args.despeckle != "off":
+        print(f"  chip postprocess: despeckle={args.despeckle} window={args.despeckle_window} "
+              f"peak_sigma={args.despeckle_peak_sigma}")
+        if provider.key != "s1":
+            print(f"  WARNING: --despeckle is a SAR filter and provider '{provider.key}' ignores it.")
+
     chip_records = []
     for r, c, chip, sub in iter_chips(stack_u8, valid, args.tile_size, args.overlap):
         if sub.mean() < args.min_valid_frac:
             continue
+        chip = provider.postprocess_chip(chip, chip_postprocess)
         chip_tf, utm_bounds, wgs84_bounds = chip_geo(transform, r, c, args.tile_size, crs)
         fname = f"chip_r{r:05d}_c{c:05d}.tif"
         write_chip_geotiff(chips_dir / fname, chip, crs, chip_tf)
@@ -436,6 +459,10 @@ def main(argv=None):
         "resolution_m": args.resolution,
         "bands": args.bands,
         "stretch": stretch,
+        # Records which preprocessing the chips on disk actually got, so a run is self-describing
+        # about whether it matches a raw-trained or a despeckled-trained checkpoint. Runs written
+        # before 2026-08-06 have no such key -> treat a missing key as {"despeckle": "off"}.
+        "chip_postprocess": chip_postprocess,
         "known_limitations": list(provider.known_limitations),
         "selection": {
             "max_cloud": args.max_cloud,

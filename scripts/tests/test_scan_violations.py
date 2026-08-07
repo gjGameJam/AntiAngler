@@ -1,4 +1,4 @@
-"""Offline tests for scripts/scan_violations.py (PHASE3_PLAN Workstream 2A, the batch driver).
+"""Offline tests for scripts/scan_violations.py (P3 workstream 2A, the batch driver).
 
 The fuse + report stages run for real over the committed fixtures (genuine integration); the GFW
 stage (needs a token) is monkeypatched to drop in a canned vessel-records file so the re-fuse path is

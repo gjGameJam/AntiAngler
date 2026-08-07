@@ -4,7 +4,8 @@
 report the boats, and let a human mark each detection correct/incorrect so the model can be
 retrained. This document is the implementation spec for the whole loop: what exists, what is
 left to build, and — most importantly — the **data contracts (seams)** between stages so each
-piece can be built and tested in isolation.
+piece can be built and tested in isolation. **Everything specified here is now built**; the enduring
+value of this file is the pinned schemas in [Data contracts](#data-contracts).
 
 ```
  ┌───────────┐   manifest.json   ┌───────────┐  detections.json  ┌───────────┐  reviews.json   ┌────────────┐
@@ -21,12 +22,12 @@ Everything for one scan lives in a single run directory
 ```
 data/raw/sentinel2/<UTC-ts>_<label>/
   chips/chip_r00000_c00000.tif ...   # stage 1 — georeferenced 8-bit RGB, self-describing
-  manifest.json                      # stage 1 → 2 seam  (EXISTS)
-  detections.json                    # stage 2 → 3 seam  (NEW)
-  detections.geojson                 # optional, for QGIS overlay (NEW)
-  reviews.json                       # stage 3 human verdicts (NEW)
+  manifest.json                      # stage 1 → 2 seam
+  detections.json                    # stage 2 → 3 seam
+  detections.geojson                 # optional, for QGIS overlay
+  reviews.json                       # stage 3 human verdicts
 data/processed/training_exports/<date>/
-  images/*.png  labels/*.txt         # stage 3 → retrain seam, YOLO format (NEW)
+  images/*.png  labels/*.txt         # stage 3 → retrain seam, YOLO format
 ```
 
 ---
@@ -34,12 +35,12 @@ data/processed/training_exports/<date>/
 ## Table of contents
 
 1. [Stage 1 — Collect (built)](#stage-1--collect-built)
-2. [Stage 2 — Scan (built)](#stage-2--scan-to-build)
-3. [Stage 3 — Report + Review (built)](#stage-3--report--review-to-build)
+2. [Stage 2 — Scan (built)](#stage-2--scan-built)
+3. [Stage 3 — Report + Review (built)](#stage-3--report--review-built)
 4. [The active-learning loop → retrain](#the-active-learning-loop--retrain)
 5. [Data contracts (all schemas in one place)](#data-contracts)
 6. [New files, dependencies, gitignore](#new-files-dependencies-gitignore)
-7. [Build order / checklist](#build-order--checklist)
+7. [Build status](#build-status)
 8. [Cross-cutting concerns](#cross-cutting-concerns)
 
 ---
@@ -89,13 +90,13 @@ batch driver to fan out.
 
 ## Stage 2 — Scan (built)
 
-**`scripts/detect_boats.py`** reads a stage-1 run dir, runs the BoatDetection YOLOv8 model on
+**`scripts/detect_boats.py`** reads a stage-1 run dir, runs the in-repo YOLOv8 model on
 every chip, maps each box back to lat/lon, deduplicates across chip overlaps, optionally keeps
 only boats inside the MPA polygon, and writes `detections.json` + `detections.geojson`.
 
 ```bash
 python scripts/detect_boats.py --run data/raw/sentinel2/<run>/ \
-    [--weights <path/to/best.pt>] [--conf 0.25] [--merge-dist 30] [--inside-mpa-only]
+    [--weights <path/to/best.pt>] [--conf 0.20] [--merge-dist 30] [--inside-mpa-only]
 ```
 
 **As built** (validated on a Singapore run: 312 raw → 122 deduped, all centroids inside the AOI):
@@ -104,7 +105,12 @@ dedup is **centroid-distance merging in UTM metres** (`--merge-dist`, default 30
 scene's single UTM CRS and merged there, then converted to WGS84. The model is fed a **PIL RGB
 image** (Ultralytics reads a numpy array as BGR, which would swap R/B on our true-color chips). No
 SAHI dependency: our 640/64px chips already *are* correct SAHI-style slices, so only the merge step
-was needed. Default `--conf 0.25` for recall.
+was needed. Default **`--conf 0.20`** for recall (the `finetune-w4ionian` deploy point, 2026-08-06).
+⚠️ **The deploy conf is not stable across retrains and has moved in both directions** (0.15→0.20→0.25,
+then back to 0.20, then held) — it is a property of the promoted checkpoint, not a constant. Always
+re-derive it with `conf_sweep.py` after a retrain rather than inheriting this number; "unchanged" is a
+result you measure, not one you assume. SAR (`best_sar.pt` = `sar-peak2`) deploys at **conf 0.20**, and
+its chips **must** be despeckled at fetch time (`sat_fetch.py --provider s1 --despeckle peak`).
 
 ### "Coarse grid → cells" — yes, and here's the precise mapping
 
@@ -225,6 +231,13 @@ The app is a self-hosted FastAPI + one inline HTML/JS/canvas page. No cloud, no 
 - **Serve chips as PNG.** Convert each uint8 RGB GeoTIFF to PNG on the fly (`pillow` /
   `rasterio.read` → encode) so the browser can display it. Draw the `detections.json` boxes over
   the image (client-side `<canvas>` from the JSON, so the underlying chip stays clean).
+- **Always show a clean copy beside the labelled one.** Every chip renders into *two* canvases from
+  the same decoded image: the labelling pane (boxes overlaid, click/drag active) and a **clean pane**
+  with nothing drawn on it. At 10 m GSD a vessel is 1–5 px, so a 2 px box stroke can be wider than
+  the boat inside it and small craft simply disappear under the overlay — the reviewer hunts on the
+  clean pane and labels on the boxed one. This is **unconditional, not a flag**: the failure it
+  prevents is a real boat left unboxed, which is precisely the complete-labels trap below, and it
+  costs nothing (same `<img>`, no second fetch). A SAR run adds the optical companion as a third pane.
 - **Per-detection verdict:** each box gets **Correct** (✓, true positive) / **Incorrect** (✗,
   false positive) buttons.
 - **Add missed boats:** let the reviewer drag a new box on the canvas for a boat the model missed
@@ -233,15 +246,6 @@ The app is a self-hosted FastAPI + one inline HTML/JS/canvas page. No cloud, no 
 - **Save** → append/overwrite the chip's entry in `reviews.json` (atomic write).
 
 Keyboard-first (←/→ between chips, keys for ✓/✗) makes labeling hundreds of chips bearable.
-
-### Alternative: Label Studio with pre-annotations
-
-If you'd rather not build UI, **Label Studio** (open-source, `pip install label-studio`) imports
-images with pre-drawn boxes from a predictions JSON. Convert `detections.json` → Label Studio
-predictions, review/correct in its mature UI, export corrected annotations, convert back to YOLO.
-Trade-off: a heavier dependency and two format adapters vs. a ~200-line purpose-built server that
-writes YOLO directly. **Recommendation:** build the small server — it closes the loop with fewer
-moving parts and no format round-trips, and the export *is* the training data.
 
 ### The one gotcha that will silently wreck retraining: complete labels
 
@@ -330,7 +334,7 @@ tiles of one Singapore scene, so train/test leak and eval numbers flatter the mo
 
 ## Data contracts
 
-### `manifest.json` — stage 1 → 2 (EXISTS)
+### `manifest.json` — stage 1 → 2
 
 Written by `sat_fetch.py`. Top level: `generated_utc`, `provider`, `collection`,
 `aoi_bbox_wgs84`, `wdpa` (`{WDPAID, WDPA_PID, NAME}` or `null` for bbox runs), `scene_crs`,
@@ -350,7 +354,7 @@ same per-item shape; only those probed before early-stop selection appear), and 
   "valid_frac": 1.0 }
 ```
 
-### `detections.json` — stage 2 → 3 (NEW)
+### `detections.json` — stage 2 → 3
 
 ```json
 {
@@ -358,7 +362,7 @@ same per-item shape; only those probed before early-stop selection appear), and 
   "run_dir": "2026-07-07T11-19-33Z_bbox",
   "weights": ".../best.pt",
   "model": "yolov8n",
-  "conf_threshold": 0.25,
+  "conf_threshold": 0.20,
   "iou_threshold": 0.5,
   "scene": { "item_id": "S2C_...", "datetime": "2026-06-13T03:15:41Z", "cloud": 15.98 },
   "wdpa": { "WDPAID": 555622064, "NAME": "Seal Rocks" },
@@ -383,7 +387,7 @@ same per-item shape; only those probed before early-stop selection appear), and 
 separate `reviews.json` keyed by `detection_id` so `detections.json` stays an immutable model
 output). `inside_mpa` is `null` for bbox-only runs.
 
-### `reviews.json` — stage 3 human verdicts (NEW)
+### `reviews.json` — stage 3 human verdicts
 
 Keyed by chip so the exporter can emit one complete label file per chip:
 
@@ -406,7 +410,7 @@ Keyed by chip so the exporter can emit one complete label file per chip:
 Export rule: for each `reviewed: true` chip, write a label line for every box with
 `verdict ∈ {correct, missed}`; drop `incorrect`; if none remain, write an empty `.txt` (negative).
 
-### YOLO label — stage 3 → retrain (NEW)
+### YOLO label — stage 3 → retrain
 
 `labels/<run>__<chip>.txt`, one line per kept box, normalized to chip size:
 
@@ -416,7 +420,7 @@ Export rule: for each `reviewed: true` chip, write a label line for every box wi
 
 Matches `BoatDetection`'s existing `PascalToYolo.py` output exactly.
 
-### `violation_events.json` — stage 4 fusion (P3, EXISTS)
+### `violation_events.json` — stage 4 fusion (P3)
 
 Written by `scripts/fuse_violations.py` into the run dir (atomic), the AIS × detection fusion output.
 This is the **actual emitted shape** (pin it before building consumers). A sibling
@@ -506,28 +510,14 @@ data/processed/training_exports/
 
 ---
 
-## Build order / checklist
+## Build status
 
-Build against **one** stage-1 run dir end-to-end before scaling out.
-
-- [x] **2a–2c. Detector** — `detect_boats.py` built & verified: per-chip inference, pixel→lat/lon,
-      centroid-metre dedup (312→122 on Singapore, all centroids inside AOI), point-in-MPA tag,
-      atomic `detections.json`/`.geojson`.
-- [x] **3a. Review server** — `review_server.py` built & verified: chips-as-PNG, canvas overlay,
-      ✓/✗ + drawn boxes, "mark reviewed" gate, atomic `reviews.json`; security controls tested.
-- [x] **3b. Export** — `export_labels.py` built & verified: reviewed chips → `images/` + `labels/`
-      (incl. empty-file hard negatives); label math matched a hand-computed value.
-- [x] **retrain tooling (in-repo)** — `build_dataset.py` (idempotently layers reviewed exports onto
-      the base set in `data/training/`) and `train.py` (fine-tune from `best.pt` or train fresh →
-      `data/training/runs/<name>/`) are built; no BoatDetection path-fixups needed.
-- [ ] **close the loop** — `build_dataset.py` → `train.py --weights best` → eval on the test split →
-      promote `best.pt` → rescan → confirm detections improved. *(first fine-tune run under way; the
-      reviewed satellite set is still tiny — 4 chips — so grow it by reviewing more runs.)*
-- [ ] **1-batch (later)** — `scan_mpas.py` to sweep all Ia/Ib marine MPAs (≤1° sub-AOIs). Needs the
-      `main()`-guard refactor from `docs/AUDIT.md` P1.1 so `sat_fetch` functions are importable.
-- [x] **violation events (P3, built)** — `scripts/fuse_violations.py` joins in-MPA detections to AIS
-      (dark-vs-matched) and, via `--vessels`, to GFW identity/fishing → the `violation_events.json`
-      contract above. Remaining P3 work: `docs/PHASE3_PLAN.md`.
+**Every stage in this spec is built and in use.** `detect_boats.py`, `review_server.py`,
+`export_labels.py`, `build_dataset.py`, `train.py`, and the stage-4 fusion (`fuse_violations.py` +
+the P3 siblings) are all live; the active-learning loop has been closed many times over — see the
+model progression in `docs/STATUS.md`. The one item never built is **`scan_mpas.py`**, a batch sweep
+over every Ia/Ib marine MPA in <=1 deg sub-AOIs; the `main()`-guard refactor it needed is long done,
+so it is buildable, but nothing currently requires it.
 
 ---
 

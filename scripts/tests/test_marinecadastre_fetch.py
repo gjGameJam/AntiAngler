@@ -1,4 +1,4 @@
-"""Offline tests for scripts/marinecadastre_fetch.py (PHASE3_PLAN Workstream 3C).
+"""Offline tests for scripts/marinecadastre_fetch.py (P3 workstream 3C).
 
 Pure stdlib — builds a synthetic MarineCadastre CSV and asserts the row normalization, AOI/time
 filtering, and a normalize → write → fuse_violations round trip (proving the output is the AIS

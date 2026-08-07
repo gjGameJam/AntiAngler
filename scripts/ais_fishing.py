@@ -12,7 +12,7 @@ except ImportError:                  # keep the module importable (and offline-t
     def load_dotenv(*_args, **_kwargs):
         return False
 
-# The objective of this script (LOCAL fishing inference, ROADMAP "Remaining TODO" / design-proposal
+# The objective of this script (LOCAL fishing inference, P3 / design-proposal
 # "infer fishing activity via GFW *or local ML*"):
 # - Read a normalized AIS positions file (the same contract fuse_violations.py --ais reads)
 # - Infer, per MMSI, whether the vessel's MOVEMENT looks like fishing rather than transit

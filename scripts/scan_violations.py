@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-# The objective of this script (P3 batch driver, PHASE3_PLAN Workstream 2A):
+# The objective of this script (P3 batch driver, P3 workstream 2A):
 # - Sequence the Phase-3 stages for one run dir / MPA end to end, reusing each stage's main(argv)
 #   (every P3 script is argv-guarded + import-safe). It is a THIN ORCHESTRATOR: no fusion or scoring
 #   logic of its own — just ordering, argv plumbing, and a per-stage log + final summary.
@@ -15,7 +15,7 @@ from pathlib import Path
 # The fuse + report stages are pure stdlib and run anywhere (and are exercised offline here). The
 # front-end stages are do-from-home: --detect needs the ML stack (torch/ultralytics/rasterio) and is
 # lazy-imported only when used; a real --gfw run needs GFW_API_TOKEN; producing the run dir itself
-# (sat_fetch) and capturing live AIS (aisstream_fetch) happen upstream. See docs/PHASE3_PLAN.md.
+# (sat_fetch) and capturing live AIS (aisstream_fetch) happen upstream. See docs/PIPELINE.md.
 #
 # House rule: a driver, not a data stream. It imports the stages; it never reimplements them.
 
@@ -35,7 +35,7 @@ def truthy(val):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description="Batch-drive the Phase-3 stages (detect -> fuse -> GFW-enrich -> report) for a run "
-                    "dir (PHASE3_PLAN Workstream 2A). Thin orchestrator over each stage's main(argv).")
+                    "dir (P3 workstream 2A). Thin orchestrator over each stage's main(argv).")
     p.add_argument("--run", type=Path, default=env_or("SCAN_RUN", None),
                    help="A detect_boats run dir (contains detections.json; or use --detect to make it).")
     p.add_argument("--ais", type=Path, default=env_or("SCAN_AIS", None),

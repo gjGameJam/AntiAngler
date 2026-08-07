@@ -1,4 +1,4 @@
-"""Offline tests for scripts/report_violations.py (PHASE3_PLAN Workstream 2B).
+"""Offline tests for scripts/report_violations.py (P3 workstream 2B).
 
 Pure stdlib — builds synthetic violation_events.json files and asserts ranking, filtering, the CSV,
 and the self-contained HTML. Run:

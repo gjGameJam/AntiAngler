@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# The objective of this script (P3 operator-facing output, PHASE3_PLAN Workstream 2B):
+# The objective of this script (P3 operator-facing output, P3 workstream 2B):
 # - Read one or more fuse_violations `violation_events.json` files (or run dirs) and aggregate their
 #   events into a single RANKED table (by violation_score, dark first at equal score)
 # - Write a CSV (for spreadsheets / further analysis) and a self-contained HTML page (zero external
@@ -45,7 +45,7 @@ def truthy(val):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description="Aggregate fuse_violations violation_events into a ranked CSV + HTML report "
-                    "(PHASE3_PLAN Workstream 2B). Pure stdlib, read-only.")
+                    "(P3 workstream 2B). Pure stdlib, read-only.")
     p.add_argument("inputs", nargs="*", type=Path,
                    help="violation_events.json files and/or run dirs (each dir's violation_events.json "
                         "is read). Also accepted via --run / --events.")

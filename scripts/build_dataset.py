@@ -130,13 +130,25 @@ def split_posneg(stems, neg):
     return p, len(stems) - p
 
 
-def purge_al_files(data_dir):
+def purge_al_files(data_dir, al_stems=()):
+    """Remove every previously-layered export file so the rebuild is idempotent.
+
+    Purge by PROVENANCE (stem is in an export tag), not by filename pattern. The `__` marker alone
+    is not enough: an external ingester may name its chips anything -- `ingest_s2ships_finland.py`
+    writes `finlandS2_<tile><date>_r00_c02`, with no `__`. Those files survived every purge while the
+    seeded split kept reassigning them, so a chip assigned to train in one build and val in the next
+    ended up in BOTH: 510 of 1034 Finland chips were duplicated across train/val when this was found
+    (2026-08-06). Base photos (`boat<N>`) are never in an export tag, so they are never touched.
+    """
+    al_stems = set(al_stems)
     removed = 0
     for split in SPLITS:
         for sub in ("images", "labels"):
             d = data_dir / sub / split
-            if d.is_dir():
-                for f in d.glob(f"*{AL_MARKER}*"):
+            if not d.is_dir():
+                continue
+            for f in d.iterdir():
+                if f.is_file() and (AL_MARKER in f.name or f.stem in al_stems):
                     f.unlink()
                     removed += 1
     return removed
@@ -163,11 +175,15 @@ def split_stems(stems, ratios, seed, holdout_filters=None):
     return {"train": items[:n_tr], "val": items[n_tr:n_tr + n_va], "test": items[n_tr + n_va:]}
 
 
-def count_base(data_dir):
+def count_base(data_dir, al_stems=()):
+    """Count TRUE base files only -- same provenance rule as purge_al_files, so an oddly-named
+    export chip is never miscounted as an untouched base photo (it inflated 'base kept' before)."""
+    al_stems = set(al_stems)
     out = {}
     for split in SPLITS:
         d = data_dir / "images" / split
-        out[split] = len([f for f in d.glob("*.png") if AL_MARKER not in f.name]) if d.is_dir() else 0
+        out[split] = len([f for f in d.glob("*.png")
+                          if AL_MARKER not in f.name and f.stem not in al_stems]) if d.is_dir() else 0
     return out
 
 
@@ -209,7 +225,7 @@ def main():
     print(f"  active-learning chips found: {len(pairs)}  "
           f"(positives {len(pairs) - len(neg)}, hard-negatives {len(neg)})")
 
-    base = count_base(data_dir)
+    base = count_base(data_dir, pairs)
     print(f"  base kept (untouched): train={base['train']} val={base['val']} test={base['test']}")
 
     assignment = split_stems(list(pairs), ratios, args.seed, args.holdout_scene)
@@ -229,8 +245,8 @@ def main():
         return
 
     if not args.no_purge:
-        removed = purge_al_files(data_dir)
-        print(f"  purged {removed} existing '__' file(s) for a clean, reproducible rebuild")
+        removed = purge_al_files(data_dir, pairs)
+        print(f"  purged {removed} previously-layered export file(s) for a clean, reproducible rebuild")
 
     copied = 0
     for split, stems in assignment.items():

@@ -24,7 +24,8 @@ also drops the real boats (at -0.10 → 7/20 FP but 60/63 TP gone, precision 0.7
 non-win* for small-vessel precision — that lever stays O3 (same-region hard negatives) + O7 (AIS fusion).
 It may still help on big-ship/anchorage scenes where FPs are genuine blank-water hits, but big-ship
 precision is already ~0.97 so the ceiling there is small. **Always calibrate per-scene against reviewed
-verdicts before enabling.** See docs/IMPROVEMENT_PLAN.md O2.
+verdicts before enabling.** Measured non-win: see docs/ROADMAP.md -> "DO NOT RE-ATTEMPT"
+("NDWI / NIR open-water filter for precision").
 
 Standalone:
 

@@ -12,7 +12,7 @@ except ImportError:                  # keep the module importable (and offline-t
     def load_dotenv(*_args, **_kwargs):
         return False
 
-# The objective of this script (AIS-track MPA geofencing, ROADMAP "Remaining TODO"):
+# The objective of this script (AIS-track MPA geofencing, P3):
 # - Read a normalized AIS positions file (the fuse_violations.py --ais contract) and an MPA polygon
 # - Flag every vessel whose AIS positions fall INSIDE the no-take MPA, independent of any satellite
 #   detection - the COOPERATIVE counterpart to the dark-vessel signal

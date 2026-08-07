@@ -1,0 +1,16 @@
+{
+  "exports": [
+    {
+      "generated_utc": "2026-08-05T18:04:05Z",
+      "source_run": "2026-07-17T19-54-09Z_s1warm-rastanura",
+      "tile_size": 640,
+      "class_map": {
+        "0": "boat"
+      },
+      "reviewed_chips": 40,
+      "positive_chips": 8,
+      "negative_chips": 32,
+      "total_boxes": 58
+    }
+  ]
+}

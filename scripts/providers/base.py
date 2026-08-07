@@ -42,8 +42,8 @@ class Provider(abc.ABC):
     default_stretch_max = 3000.0
 
     #: run-root subdir under ``data/raw/`` — one per MODALITY, so optical and SAR runs never
-    #: share a directory (a SAR chip must never reach the optical training set; see
-    #: ``docs/IMPROVEMENT_PLAN.md`` cross-cutting). ``--output-dir``/``SAT_OUTPUT_DIR``
+    #: share a directory (a SAR chip must never reach the optical training set — the two have
+    #: separate models, training trees and gates). ``--output-dir``/``SAT_OUTPUT_DIR``
     #: still override it. Providers reading the same sensor share one value.
     output_subdir = "sentinel2"
 
@@ -83,3 +83,21 @@ class Provider(abc.ABC):
         over the whole AOI. Return ``(uint8_stack, params)`` where ``params`` records how
         (goes into the manifest so the stretch is reproducible). Match this to the detection
         model's training preprocessing."""
+
+    # --- optional hook (NOT abstract: providers that need no per-chip step inherit the no-op) ---
+
+    def postprocess_chip(self, chip, opts):
+        """Per-chip preprocessing applied **after tiling**, on the uint8 ``(C, H, W)`` chip.
+
+        Returns a ``(C, H, W)`` uint8 array (the same one by default). ``opts`` is the
+        ``chip_postprocess`` dict ``sat_fetch.main()`` builds from the CLI; a provider reads
+        only the keys it understands and ignores the rest.
+
+        **Why after tiling, not on the AOI mosaic:** a filter with a spatial window gives
+        different answers at a tile boundary than in a tile interior. The SAR training chips
+        were despeckled per-chip, after tiling, with nodata already zeroed — so filtering the
+        mosaic first would disagree with training within ~window/2 px of every tile edge. That
+        mismatch is exactly what silently breaks a model trained on filtered data. Whatever a
+        provider does here, it must match what its model was TRAINED on, byte for byte.
+        """
+        return chip
