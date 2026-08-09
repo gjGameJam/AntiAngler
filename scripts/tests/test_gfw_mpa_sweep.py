@@ -103,6 +103,36 @@ class TestSelectMpas(unittest.TestCase):
         self.assertEqual(meta["tail_total"], 10)
         self.assertEqual(meta["tail_slice"], 4)
         self.assertEqual(meta["tail_cycle_runs"], 3)  # ceil(10/4)
+        self.assertFalse(meta["priority_rotating"])
+
+    def test_capacity_below_priority_tier_rotates_the_tier_itself(self):
+        """The starvation guard: if the budget cannot fit the priority tier, the tier
+        must ROTATE rather than being cut at the same place every run — otherwise its
+        smallest members are never swept while the run still claims to cover the tier."""
+        seen = set()
+        for day in range(3):
+            sel, meta = ms.select_mpas(self.rows, min_area=1.0, tail_slice=4,
+                                       day_ordinal=day, capacity=2)
+            self.assertTrue(meta["priority_rotating"])
+            self.assertEqual(len(sel), 2, "must not exceed capacity")
+            self.assertEqual(meta["tail_slice"], 0, "no tail when the tier does not fit")
+            seen.update(r["WDPA_PID"] for r in sel)
+        self.assertEqual(len(seen), 5, "3 runs of 2 must reach all 5 priority MPAs")
+
+    def test_capacity_limits_the_tail_not_the_priority_tier(self):
+        """With room for the tier but not the full tail slice, the tier stays whole."""
+        sel, meta = ms.select_mpas(self.rows, min_area=1.0, tail_slice=10,
+                                   day_ordinal=0, capacity=7)
+        self.assertFalse(meta["priority_rotating"])
+        self.assertEqual(meta["priority_count"], 5)
+        self.assertEqual(meta["tail_slice"], 2)
+        self.assertEqual(len(sel), 7)
+
+    def test_capacity_none_means_unlimited(self):
+        sel, meta = ms.select_mpas(self.rows, min_area=1.0, tail_slice=10,
+                                   day_ordinal=0, capacity=None)
+        self.assertFalse(meta["priority_rotating"])
+        self.assertEqual(len(sel), 15)
 
     def test_rotation_advances_with_the_date_and_covers_the_tail(self):
         """Successive runs must not re-check the same tail slice forever."""
@@ -312,7 +342,9 @@ class TestLoadMpaIndex(unittest.TestCase):
 
 class TestSummarizeMarkdown(unittest.TestCase):
     def _result(self, events=None, errors=None, **cov):
-        coverage = {"min_area_km2": 1.0, "priority_count": 748, "tail_total": 1051,
+        coverage = {"min_area_km2": 1.0, "priority_total": 748, "priority_count": 748,
+                    "priority_offset": 0, "priority_cycle_runs": 1,
+                    "priority_rotating": False, "capacity": 750, "tail_total": 1051,
                     "tail_slice": 250, "tail_offset": 0, "tail_cycle_runs": 5,
                     "index_total": 1799, "selected": 998, "queried": 998, "skipped": 0,
                     "budget_exhausted": False}

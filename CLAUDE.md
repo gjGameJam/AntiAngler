@@ -39,11 +39,15 @@ python scripts/gfw_fetch.py
 # Step 3b: Sweep every marine Ia/Ib MPA for fishing effort — the nightly watch.
 # Answers "was any fishing vessel inside this protected area?" with NAMED vessels.
 # ⚠️ Sequential by design: the GFW token allows ONE in-flight request (any concurrency
-#    returns 429), and a region takes ~13 s. Full 1799-MPA coverage would be ~6.5 h, so
-#    MPAs >= --min-area are swept every run and the smaller tail rotates by date.
-python scripts/gfw_mpa_sweep.py                       # ~2.7 h: 748 MPAs >=1 km2 + 250 tail
+#    returns 429), and a region takes ~13 s locally / ~24 s from a CI runner. Full
+#    1799-MPA coverage is ~6.5 h locally and ~12 h in CI, so MPAs >= --min-area are swept
+#    every run and the smaller tail rotates by date. --max-minutes sizes the selection and
+#    hard-stops the run; if even the >= --min-area tier does not fit, THAT rotates too
+#    (so its smallest members are never starved) and the run says so.
+python scripts/gfw_mpa_sweep.py                       # 748 MPAs >=1 km2, ~5 h at CI rate
 python scripts/gfw_mpa_sweep.py --dry-run --limit 5   # no token, no network
-python scripts/gfw_mpa_sweep.py --min-area 100 --tail-slice 0   # ~35 min, big MPAs only
+python scripts/gfw_mpa_sweep.py --min-area 10 --tail-slice 350  # 392 big + 350 tail, ~5 h
+python scripts/gfw_mpa_sweep.py --min-area 100 --tail-slice 0   # 161 MPAs, ~1 h
 
 # Step 4: Fetch a Sentinel-2 scene for an MPA (or explicit bbox) and tile it into
 # georeferenced RGB chips under data/raw/sentinel2/ (Planetary Computer — no credentials)
@@ -178,7 +182,7 @@ It installs **only** the pinned `requests` + `python-dotenv` (not all of `requir
 
 ⚠️ **What this workflow used to do, and why it looked healthy while doing nothing.** Until 2026-08-09 it ran `gfw_fetch.py` with its defaults: one unrelated EEZ (`8466`), `trawlers` only, and `date-range=[yesterday, yesterday]`. That range is **empty** (GFW's interval is half-open), so every nightly run uploaded `entries: [null]` and exited 0. Confirmed against the 2026-08-08 artifact. Three separate faults had to be fixed together — the empty range, the gear filter (values are **lowercase**; `trawlers` also excluded a real `OTHER_PURSE_SEINES` intrusion), and the region (an EEZ, not the MPAs the project is about).
 
-`.github/workflows/tests.yml` runs the **offline test suite** on every `push` + `pull_request` (and `workflow_dispatch`): `python -m compileall -q scripts` (a syntax gate over *every* script, including the heavy ML/geo ones — `compileall` parses without importing) then `python -m unittest discover -s scripts/tests` (**324 offline tests**). It needs **no credentials and no `pip install`** — the suite is pure stdlib (the P3 ingesters soft-import `python-dotenv` and lazy-import `requests`/`websocket-client`, `scripts/_http.py` lazy-imports `requests`/`urllib3` inside `build_session`, and `eval_holdout.py`/`conf_sweep.py` lazy-import `ultralytics` inside `load_yolo()`), so **keep new tests dependency-free**; `test_http.py` and `test_eval_holdout.py` each have a guard test that fails if those modules regain a module-level `import requests` / `import ultralytics`. ⚠️ A test needing numpy/PIL (or anything else unavailable in a bare CI job) must **skip**, not fail — `test_chip_postprocess.py` shows the pattern: stdlib-only source-inspection guards always run, and the numeric assertions sit behind `@unittest.skipUnless`. This catches syntax errors in any script and P3 regressions that `gfw.yml` (which only runs the MPA sweep) would miss.
+`.github/workflows/tests.yml` runs the **offline test suite** on every `push` + `pull_request` (and `workflow_dispatch`): `python -m compileall -q scripts` (a syntax gate over *every* script, including the heavy ML/geo ones — `compileall` parses without importing) then `python -m unittest discover -s scripts/tests` (**327 offline tests**). It needs **no credentials and no `pip install`** — the suite is pure stdlib (the P3 ingesters soft-import `python-dotenv` and lazy-import `requests`/`websocket-client`, `scripts/_http.py` lazy-imports `requests`/`urllib3` inside `build_session`, and `eval_holdout.py`/`conf_sweep.py` lazy-import `ultralytics` inside `load_yolo()`), so **keep new tests dependency-free**; `test_http.py` and `test_eval_holdout.py` each have a guard test that fails if those modules regain a module-level `import requests` / `import ultralytics`. ⚠️ A test needing numpy/PIL (or anything else unavailable in a bare CI job) must **skip**, not fail — `test_chip_postprocess.py` shows the pattern: stdlib-only source-inspection guards always run, and the numeric assertions sit behind `@unittest.skipUnless`. This catches syntax errors in any script and P3 regressions that `gfw.yml` (which only runs the MPA sweep) would miss.
 
 ## Data Layout
 

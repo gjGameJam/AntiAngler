@@ -80,13 +80,16 @@ DEFAULT_MAX_ERROR_RATE = 0.25
 # does not make the sweep faster, it makes it fail.
 DEFAULT_WORKERS = 1
 
-# Cold requests average ~12-14s regardless of window width (1-day, 7-day and 30-day
-# windows all measured the same), so a region costs ~13s and the schedule is:
-#   all 1799 MPAs -> ~390 min, past GitHub Actions' 6h job ceiling
-#   the 748 MPAs >= 1 km2 -> ~162 min
-# Hence the two-tier design in select_mpas().
+# Cold requests average ~12-14s locally regardless of window width (1-day, 7-day and
+# 30-day windows all measured the same) and ~24s from a GitHub-hosted runner (30 regions
+# in 12 min, measured 2026-08-09). At the CI rate:
+#   all 1799 MPAs        -> ~12 h   (impossible; the job ceiling is 6 h)
+#   the 748 MPAs >= 1 km2 -> ~5.0 h  (fills the whole budget on its own)
+#   the 392 MPAs >= 10 km2 -> ~2.6 h (leaves room for a tail slice)
+# Hence the two-tier, capacity-aware design in select_mpas().
 DEFAULT_MIN_AREA_KM2 = 1.0
 DEFAULT_MAX_MINUTES = 300.0
+DEFAULT_RATE_S = 24.0
 
 
 def load_env():
@@ -135,6 +138,12 @@ def parse_args(argv=None):
                    help=f"Stop sweeping after this many minutes and report what was "
                         f"skipped (default {DEFAULT_MAX_MINUTES}). Guards the GitHub "
                         f"Actions 6h job ceiling. 0 disables the budget.")
+    p.add_argument("--rate-estimate-s", type=float,
+                   default=float(env_or("GFW_MPA_RATE_ESTIMATE_S", DEFAULT_RATE_S)),
+                   help=f"Assumed seconds per region, used with --max-minutes to size the "
+                        f"selection up front (default {DEFAULT_RATE_S}, measured on a CI "
+                        f"runner; locally it is ~13). Only affects how many MPAs are "
+                        f"chosen — the real budget is still enforced by the clock.")
     p.add_argument("--workers", type=int, default=int(env_or("GFW_MPA_WORKERS",
                                                              DEFAULT_WORKERS)),
                    help="In-flight requests. KEEP AT 1: the GFW token rejects any "
@@ -216,42 +225,69 @@ def _area_km2(row):
         return 0.0
 
 
-def select_mpas(rows, min_area=DEFAULT_MIN_AREA_KM2, tail_slice=250, day_ordinal=None):
-    """Split the index into the always-swept tier plus a rotating slice of the tail.
+def _rotate(items, day_ordinal, take):
+    """Take ``take`` items starting at a date-derived offset, wrapping around.
 
-    A full 1799-region sweep costs ~6.5h (one request at a time at ~13s each), past the
-    GitHub Actions job ceiling — so the run cannot cover everything every night. Rather
-    than truncate arbitrarily:
+    Stateless on purpose: the offset comes from the date, not a stored cursor, so there is
+    nothing to commit back and a missed run does not desynchronize the cycle."""
+    if not items or take <= 0:
+        return [], 0
+    take = min(take, len(items))
+    offset = (day_ordinal * take) % len(items)
+    return (items[offset:] + items[:offset])[:take], offset
 
-      * **priority tier** — every MPA with ``GIS_M_AREA >= min_area``, swept on EVERY run,
-        largest first. At the 1 km2 default that is 748 of 1799 (~162 min).
-      * **rotating tail** — the sub-threshold remainder (median Ia/Ib MPA is 0.42 km2,
-        below what GFW's AIS effort resolves anyway) sliced ``tail_slice`` at a time, the
-        offset advancing with the date so successive runs cover the whole tail and none is
-        never checked.
 
-    The rotation is derived from the date, not from a stored cursor, so the job stays
-    stateless — nothing to commit back, and a missed night does not desynchronize it.
+def select_mpas(rows, min_area=DEFAULT_MIN_AREA_KM2, tail_slice=250, day_ordinal=None,
+                capacity=None):
+    """Choose which MPAs this run sweeps, given how many it has time for.
 
-    Returns ``(selected, meta)``; ``meta`` records the split so the run can report its own
+    A full 1799-region sweep costs 6-12h (one request at a time; ~13s locally but ~24s
+    from a CI runner, measured 2026-08-09), past the GitHub Actions job ceiling — so a run
+    cannot cover everything. Two tiers:
+
+      * **priority tier** — every MPA with ``GIS_M_AREA >= min_area``, largest first.
+      * **tail** — the sub-threshold remainder. The median Ia/Ib MPA is 0.42 km2, well
+        below what GFW's AIS-derived effort resolves, so these are worth checking
+        occasionally rather than nightly.
+
+    ``capacity`` is how many regions the time budget affords. **If the priority tier does
+    not fit, it ROTATES too** rather than always being truncated at the same place —
+    otherwise the smallest members of the priority tier would be silently starved forever
+    while the run still claimed to sweep "everything above the threshold". Whatever
+    capacity is left over goes to the tail, also rotating.
+
+    Returns ``(selected, meta)``; ``meta`` records the split so the run reports its actual
     coverage instead of implying it looked everywhere."""
     day_ordinal = (datetime.now(timezone.utc).date().toordinal()
                    if day_ordinal is None else day_ordinal)
     priority = sorted([r for r in rows if _area_km2(r) >= min_area],
                       key=lambda r: -_area_km2(r))
     tail = [r for r in rows if _area_km2(r) < min_area]
+    cap = len(priority) + len(tail) if capacity is None else max(0, capacity)
 
-    take = max(0, min(tail_slice, len(tail)))
-    offset = (day_ordinal * take) % len(tail) if tail and take else 0
-    rotated = (tail[offset:] + tail[:offset])[:take] if take else []
+    if len(priority) > cap:
+        # Budget cannot even cover the priority tier: rotate within it so every
+        # above-threshold MPA is reached over successive runs.
+        chosen, p_offset = _rotate(priority, day_ordinal, cap)
+        taken_tail, t_offset = [], 0
+        p_cycle = -(-len(priority) // cap) if cap else None
+    else:
+        chosen, p_offset, p_cycle = priority, 0, 1
+        take = min(tail_slice, cap - len(priority), len(tail))
+        taken_tail, t_offset = _rotate(tail, day_ordinal, take)
 
-    return priority + rotated, {
+    return chosen + taken_tail, {
         "min_area_km2": min_area,
-        "priority_count": len(priority),
+        "capacity": cap,
+        "priority_total": len(priority),
+        "priority_count": len(chosen),
+        "priority_offset": p_offset,
+        "priority_cycle_runs": p_cycle,
+        "priority_rotating": len(priority) > cap,
         "tail_total": len(tail),
-        "tail_slice": len(rotated),
-        "tail_offset": offset,
-        "tail_cycle_runs": (-(-len(tail) // take) if take else None),
+        "tail_slice": len(taken_tail),
+        "tail_offset": t_offset,
+        "tail_cycle_runs": (-(-len(tail) // len(taken_tail)) if taken_tail else None),
     }
 
 
@@ -370,13 +406,21 @@ def summarize_markdown(result, top_mpas=40, top_vessels=5):
              f"**Failed regions** {len(result['errors'])}", ""]
 
     if cov:
-        tail = (f"plus {cov.get('tail_slice', 0)} of {cov.get('tail_total', 0)} smaller "
-                f"ones (rotating; the tail is fully covered every "
-                f"{cov.get('tail_cycle_runs')} runs)"
-                if cov.get("tail_slice") else "and no smaller ones")
-        lines += [f"_Coverage: all {cov.get('priority_count', 0)} MPAs ≥ "
-                  f"{cov.get('min_area_km2')} km² {tail}, out of "
-                  f"{cov.get('index_total', 0)} in the index._", ""]
+        if cov.get("priority_rotating"):
+            lines += [f"_Coverage: {cov.get('priority_count', 0)} of "
+                      f"{cov.get('priority_total', 0)} MPAs ≥ {cov.get('min_area_km2')} "
+                      f"km², **rotating** — the time budget does not fit the whole tier, "
+                      f"so it is covered every {cov.get('priority_cycle_runs')} runs. No "
+                      f"smaller MPAs this run. {cov.get('index_total', 0)} in the "
+                      f"index._", ""]
+        else:
+            tail = (f"plus {cov.get('tail_slice', 0)} of {cov.get('tail_total', 0)} "
+                    f"smaller ones (rotating; the tail is fully covered every "
+                    f"{cov.get('tail_cycle_runs')} runs)"
+                    if cov.get("tail_slice") else "and no smaller ones")
+            lines += [f"_Coverage: all {cov.get('priority_count', 0)} MPAs ≥ "
+                      f"{cov.get('min_area_km2')} km² {tail}, out of "
+                      f"{cov.get('index_total', 0)} in the index._", ""]
         if cov.get("budget_exhausted"):
             lines += [f"> ⚠️ **Time budget reached — {cov.get('skipped')} selected MPAs "
                       f"were not queried in this run.**", ""]
@@ -539,7 +583,10 @@ def main(argv=None):
     args = parse_args(argv)
     start, end = resolve_window(args)
     all_rows = load_mpa_index(args.index)
-    mpas, coverage = select_mpas(all_rows, args.min_area, args.tail_slice)
+    capacity = (int(args.max_minutes * 60 / args.rate_estimate_s)
+                if args.max_minutes and args.rate_estimate_s > 0 else None)
+    mpas, coverage = select_mpas(all_rows, args.min_area, args.tail_slice,
+                                 capacity=capacity)
     if args.limit:
         mpas = mpas[:args.limit]
     params = build_params(args, start, end)
@@ -547,10 +594,20 @@ def main(argv=None):
     print("GFW MPA SWEEP")
     print(f"  window:   [{start}, {end})   <- end is EXCLUSIVE")
     print(f"  index:    {len(all_rows)} MPAs ({args.index})")
-    print(f"  selected: {coverage['priority_count']} >= {coverage['min_area_km2']} km2 "
-          f"+ {coverage['tail_slice']} of {coverage['tail_total']} smaller (rotating, "
-          f"offset {coverage['tail_offset']}, full cycle every "
-          f"{coverage['tail_cycle_runs']} runs)")
+    print(f"  capacity: {capacity if capacity is not None else 'unlimited'} regions "
+          f"({args.max_minutes or 0:g} min budget at ~{args.rate_estimate_s:g}s each)")
+    if coverage["priority_rotating"]:
+        print(f"  selected: {coverage['priority_count']} of "
+              f"{coverage['priority_total']} MPAs >= {coverage['min_area_km2']} km2 "
+              f"-- BUDGET TOO SMALL FOR THE TIER, so it rotates too (offset "
+              f"{coverage['priority_offset']}, full cycle every "
+              f"{coverage['priority_cycle_runs']} runs); no tail this run")
+    else:
+        print(f"  selected: all {coverage['priority_count']} MPAs >= "
+              f"{coverage['min_area_km2']} km2 + {coverage['tail_slice']} of "
+              f"{coverage['tail_total']} smaller (rotating, offset "
+              f"{coverage['tail_offset']}, full cycle every "
+              f"{coverage['tail_cycle_runs']} runs)")
     if args.limit:
         print(f"  --limit:  truncated to the first {len(mpas)}")
     print(f"  region:   {MPA_REGION_DATASET} / WDPA_PID")

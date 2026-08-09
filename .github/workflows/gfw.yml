@@ -75,6 +75,9 @@ jobs:
 
       - name: Sweep MPAs for fishing effort
         env:
+          # Without this the whole run's stdout lands in the log at once when the job
+          # ends — on a multi-hour sweep that means hours with no visible progress.
+          PYTHONUNBUFFERED: '1'
           GFW_API_TOKEN: ${{ secrets.GFW_API_TOKEN }}
           GFW_MPA_MIN_AREA: ${{ inputs.min_area || '1.0' }}
           GFW_MPA_TAIL_SLICE: ${{ inputs.tail_slice || '250' }}
