@@ -4,10 +4,15 @@ _Snapshot: **2026-08-06** (verified against code and against real eval runs, not
 read **cold**, with no prior conversation context._
 
 > **W1–W12 are all closed.** Nothing is queued. Both detectors are promoted at swept operating points,
-> Phase 3 has run end-to-end on real data, and all AUDIT P1/P2 findings are closed. What remains in
+> Phase 3 has run end-to-end on real data **and its detections are now reviewed** (W3-B: precision
+> 0.750, recall 1.000), and all AUDIT P1/P2 findings are closed. What remains in
 > this file is (a) the current state, (b) a one-line result per closed item, (c) the long-form outcomes
 > for the few whose *lesson* is non-obvious, and (d) the **DO NOT RE-ATTEMPT** table — the most
 > valuable section here, because every row cost real time to learn.
+>
+> 🚨 **One correction worth carrying forward:** the W3-B in-MPA dark candidate **did not survive
+> review** — it was a nearshore rock. **The product has no validated in-MPA dark vessel yet**, and
+> that is the single open question (unscoped, not a work item). See W3-B below.
 
 **Read in this order:**
 1. **`docs/STATUS.md`** — live model, per-run eval numbers, model progression, open problems.
@@ -194,15 +199,51 @@ appeared in one scene:
 - **matched (1)** — **ORION**, MMSI 368109370. AIS ping 18:38:52Z vs acquisition 18:39:19Z: a
   **27-second** offset. At 5.4 kn her feasible-movement envelope was 575 m; the detection sat 450 m
   away, so the gate matched her. The envelope design validating itself on real data.
-- **dark (7)** — one inside Scorpion (Santa Cruz Island) SMR.
+- **dark (7 claimed → 5 real after review)**.
 - **reported (2)** — ISLAND EXPLORER (1.21 h inside Scorpion) and WHALE RIDER, by AIS geofencing alone.
 
-⚠️ **Two honest limits on reading that result.** The 7 dark detections are **unreviewed** at conf 0.20
-over rocky, kelpy water — some are certainly false positives. More importantly, **"dark" does not mean
-"violation" here**: US AIS carriage is mandatory only for certain vessel classes, and the Channel
-Islands are full of small dive and recreational craft that legally carry none. The dark signal is only
-strong where any vessel is anomalous. Relatedly, `ais_fishing.py` scored ISLAND EXPLORER 0.36 because
-slow meandering reads as fishing-like — which is also exactly what a dive or whale-watching boat does.
+**Reviewed 2026-08-06 — all 30 chips.** At conf 0.20: **6 TP / 2 FP → precision 0.750**, and
+**recall 1.000** (6 of 6 distinct vessels). The first honest end-to-end precision figure for the
+product loop. Three results, one of which is a correction to the claim above:
+
+1. ✅ **The ORION match holds.** Its detection is a real vessel, so the 27 s / 450 m envelope match is
+   validated end to end rather than a coincidental hit on clutter. This was the headline claim and it
+   survives review.
+2. 🚨 **The in-MPA dark candidate does not.** The one dark detection inside Scorpion SMR — the *product*
+   claim of this work item — is `det_00003`, a **false positive on the Santa Cruz Island shoreline**.
+   Point-in-polygon against `wdpa_marine_ia_ib.gpkg` puts **none of the 5 confirmed dark vessels**
+   inside any Ia/Ib MPA. W3-B proves the pipeline; it does **not** contain a validated in-MPA dark
+   vessel, and must not be cited as if it does.
+3. **The water mask helps, but only halfway — tested, not assumed** (2026-08-07). This run was
+   fetched without `--water-only`, so the obvious question was whether masking would have cleared the
+   errors. Built `water_mask.tif` (WorldCover, 94.4% water) and re-ran `detect_boats.py --water-only`
+   at the same conf 0.20: **1 of 2 FPs dropped, precision 0.750 → 0.857**, recall unchanged.
+   The FP mix is **1 land / 1 on-water**, so the 2026-07-16 measurement (84% on-water / 16% land)
+   **survives** — an archipelago scene does not invert it:
+   - `det_00007` (Anacapa spine) — **8 m** from mask land, dropped. ✅
+   - `det_00003` (the **in-MPA** one) — **118 m offshore**, an awash rock / surf-and-kelp patch on
+     open water. WorldCover correctly calls it water. **The one FP that mattered is unmaskable.**
+
+   **The near-miss worth recording:** all 6 TPs are >460 m from mask land, both FPs within 118 m, so a
+   ~150 m shoreline buffer scores 1.000/1.000 on this scene. ⚠️ **Not adopted, and it should not be
+   adopted on this evidence** — n=8, one scene, and a 150 m no-boat ring would gut recall on the
+   anchorage holdouts (Port Said, Singapore, Jebel Ali all hold vessels moored inside 150 m of shore).
+   This is precisely the shape of the filters already in DO NOT RE-ATTEMPT: a clean separation on a
+   thin sample with a failure mode nobody tested. If anyone revives it, the gate is the four optical
+   holdouts, not this scene.
+
+**Method note worth keeping.** The reviewer drew one box that looked like a miss; it sits **7.6 m**
+from `det_00001` in the *overlapping neighbour chip* — the same vessel, correctly deduped by
+`--merge-dist 30` and correctly re-labelled per the complete-labels rule. Scoring it as a miss would
+have reported recall 0.857 instead of 1.000. **Distance-check human boxes against the deduped
+detection list before counting a miss**; with 64 px of chip overlap, duplicates are expected, not
+exceptional.
+
+⚠️ **"Dark" still does not mean "violation" here**: US AIS carriage is mandatory only for certain
+vessel classes, and the Channel Islands are full of small dive and recreational craft that legally
+carry none. The dark signal is only strong where any vessel is anomalous. Relatedly, `ais_fishing.py`
+scored ISLAND EXPLORER 0.36 because slow meandering reads as fishing-like — which is also exactly what
+a dive or whale-watching boat does.
 
 **Why historical rather than live:** AISStream authenticates but delivers zero frames (see "Where we
 are"). The historical path is also *better* for this proof — you pick the date after the fact, so the

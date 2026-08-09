@@ -38,8 +38,13 @@ full command list, `../CLAUDE.md`. Point-in-time — verify against code before 
   (recall CI **[0.72, 0.94]**), Santos **P 0.618 / R 0.475**; pooled **66 TP / 43 FP** vs `sar-deep4`'s
   54 / 101. Backup: `best_sar_deep4.pt`.
 - **Phase 3 (AIS fusion):** built, offline-tested, live-validated (2026-07-26) and **run end-to-end on
-  real data** (2026-08-06) — all three statuses in one scene. See "Phase 3" below.
-- **Nothing is queued.** W1–W12 are all closed. See `ROADMAP.md` → RESULTS.
+  real data** (2026-08-06) — all three statuses in one scene, now **human-reviewed**: **precision
+  0.750** (6 TP / 2 FP), **recall 1.000** (6/6) at conf 0.20. The ORION AIS match is confirmed real.
+  🚨 **But the one in-MPA dark candidate was a false positive on a nearshore rock** — see "Phase 3"
+  below before citing this run. **The product has no validated in-MPA dark vessel yet.**
+- **Nothing is queued.** W1–W12 are all closed. See `ROADMAP.md` → RESULTS. The one **open question**
+  (not a work item, nobody has scoped it): find a scene that holds a *real* in-MPA dark vessel — that
+  is the last unproven link in the product story.
 
 ### The two things most likely to bite next session
 
@@ -187,16 +192,68 @@ MarineCadastre AIS filtered to ±1 h → 2763 positions / 74 vessels). All three
 
 - **matched (1)** — ORION, MMSI 368109370: AIS ping at 18:38:52Z vs acquisition 18:39:19Z, a
   **27-second** offset. At 5.4 kn her feasible-movement envelope was 575 m; the detection sat 450 m
-  away. The envelope design validating itself on real data.
-- **dark (7)** — one inside Scorpion (Santa Cruz Island) SMR.
+  away. The envelope design validating itself on real data. ✅ **Detection confirmed real by review**
+  (2026-08-06), so the match is validated end to end and not a coincidental hit on a rock.
+- **dark (7 claimed → 5 real)** — see the review result below.
 - **reported (2)** — ISLAND EXPLORER (1.21 h inside Scorpion) and WHALE RIDER, by AIS geofencing alone.
 
-⚠️ **Two limits on reading that.** The 7 dark detections are **unreviewed** at conf 0.20 over rocky,
-kelpy water — some are certainly false positives. And **"dark" does not mean "violation" here**: US
-AIS carriage is mandatory only for certain vessel classes, and the Channel Islands are full of small
-dive and recreational craft that legally carry none. The dark signal is only strong where any vessel
-is anomalous. Relatedly, `ais_fishing.py` scored ISLAND EXPLORER 0.36 because slow meandering reads as
-fishing-like — which is exactly what a dive or whale-watching boat does.
+### The review result (2026-08-06) — first honest end-to-end precision
+
+All **30 chips** were human-reviewed in `review_server.py`. At `conf 0.20`, `finetune-w4ionian`:
+
+| | count |
+|---|---|
+| detections emitted | 8 |
+| confirmed real (TP) | **6** |
+| false positives | **2** |
+| **precision** | **0.750** |
+| distinct vessels visible to the reviewer | 6 |
+| **recall** | **1.000** (6/6) |
+
+Three things that only reviewing could have told us:
+
+1. 🚨 **The in-MPA dark candidate was a rock.** The single dark detection inside an MPA — `det_00003`,
+   inside **Scorpion (Santa Cruz Island) SMR**, the one this run was cited for — is a **false
+   positive** on a rock ~118 m off the Santa Cruz shore. Point-in-polygon against
+   `wdpa_marine_ia_ib.gpkg` puts **none of the 5 confirmed dark vessels inside any Ia/Ib MPA**. The
+   scene proves the *plumbing* end to end; it does **not** contain a validated in-MPA dark vessel.
+   Do not cite it as one.
+2. **The water mask is a partial fix — it does NOT rescue the in-MPA candidate.** Tested directly
+   (2026-08-07): `water_mask.py` + `detect_boats.py --water-only` on this run dropped **1 of the 2**
+   false positives, precision **0.750 → 0.857** at unchanged recall. The FP mix is **1 land / 1
+   on-water**, not 2/2 land — the 2026-07-16 measurement (84% on-water / 16% land) is *not*
+   overturned by an island scene:
+   - `det_00007` (Anacapa spine) is **8 m** from mask land → dropped. ✅
+   - `det_00003` (the **in-MPA** one) is **118 m offshore** — an awash rock / surf-and-kelp patch on
+     open water beside a headland. WorldCover correctly calls it water, so **no land mask will ever
+     catch it**. The FP that mattered is on-water.
+
+   A **shoreline buffer** would clear both: all 6 TPs sit >460 m from land while both FPs are within
+   118 m, so dropping detections within ~150 m of mask land gives 1.000/1.000 here. ⚠️ **Do not adopt
+   that on this evidence** — n=8 on one scene, and a 150 m no-boat ring would gut recall on exactly
+   the anchorage scenes the detector is gated on (Port Said, Singapore, Jebel Ali all hold vessels
+   moored well inside 150 m of shore). It is a hypothesis with an obvious failure mode, not a lever.
+   Kept as a measurement so nobody re-derives it from scratch.
+3. **A "missed" box is not always a missed vessel.** The reviewer drew one box in
+   `chip_r00000_c02021` — it is **7.6 m** from `det_00001` in the overlapping neighbour chip, i.e. the
+   *same vessel*, correctly merged away by `--merge-dist 30` and correctly re-labelled per the
+   complete-labels rule. Counting it as a miss would have understated recall as 0.857. **Always
+   distance-check human boxes against the deduped detection list before calling anything a miss.**
+
+**What is on disk in that run dir** (`data/raw/sentinel2/2026-08-06T18-01-57Z_sbchannel-anacapa-20240823/`):
+`detections.json` is the **reviewed 8** and is canonical — `reviews.json` and `violation_events.json`
+both refer to it, so leave it that way. `detections_wateronly.json` is the 7-detection `--water-only`
+re-run kept for the record, and `water_mask.tif` is the cached WorldCover mask (no refetch needed).
+`export_labels.py` reads only `reviews.json` + `manifest.json`, so the review is safe either way.
+**The 30 reviewed chips have not been exported** — `export_labels.py --run <that dir>` would add 6
+SB-Channel positives plus 24 hard negatives, including two genuine coastal-rock negatives of exactly
+the class that caused both errors. Nobody has decided whether to fold them in.
+
+⚠️ **"Dark" still does not mean "violation" here.** US AIS carriage is mandatory only for certain
+vessel classes, and the Channel Islands are full of small dive and recreational craft that legally
+carry none. The dark signal is only strong where any vessel is anomalous. Relatedly, `ais_fishing.py`
+scored ISLAND EXPLORER 0.36 because slow meandering reads as fishing-like — which is exactly what a
+dive or whale-watching boat does.
 
 ---
 
@@ -213,8 +270,13 @@ fishing-like — which is exactly what a dive or whale-watching boat does.
    pass `--conf` explicitly.
 4. **TLS interception** — every fetch needs the CA-bundle + `--insecure-tls` recipe below, and
    `--insecure-tls` must be user-authorized each session.
-5. **The 8 SB Channel detections (2026-08-06) are unreviewed**, so the fusion run's precision is
-   unknown. Reviewing them would give the product loop its first honest end-to-end precision figure.
+5. ~~The 8 SB Channel detections are unreviewed~~ — **CLOSED 2026-08-06.** All 30 chips reviewed:
+   **precision 0.750** (6 TP / 2 FP), **recall 1.000** (6/6 distinct vessels). The ORION AIS match is
+   confirmed real. 🚨 **But the one in-MPA dark candidate (Scorpion SMR) was a false positive on a
+   rock** — the product loop has no validated in-MPA dark vessel yet. The water mask was then built
+   and tested (2026-08-07): it lifts precision to **0.857** but **cannot** drop the in-MPA FP, which
+   sits 118 m offshore on water. See "Phase 3" above. **The open successor question is now only one:
+   find a scene that holds a real in-MPA dark vessel** — that is what the product still lacks.
 
 ---
 
@@ -300,4 +362,5 @@ venv/Scripts/python.exe scripts/sat_fetch.py --provider s1 --bbox <...> --despec
 ## Repo state
 
 Work is on branch **`sar-deep3-and-roadmap-closeout`**, not merged to `main`. The 2026-08-06 session
-(W4, W12, W3-B, the split-leak fix, and this documentation pass) is **uncommitted**.
+(W4, W12, W3-B, the W3-B chip review, the split-leak fix, and this documentation pass) is
+**uncommitted**.
