@@ -32,7 +32,18 @@ python scripts/prep_polygons.py
 python scripts/view_polygons.py
 
 # Step 3: Fetch GFW fishing-effort data and persist to data/raw/gfw/
+# ⚠️ --end is EXCLUSIVE (GFW's date-range is half-open [start, end)). The old default of
+#    [yesterday, yesterday] is an EMPTY interval and returned zero rows on every run.
 python scripts/gfw_fetch.py
+
+# Step 3b: Sweep every marine Ia/Ib MPA for fishing effort — the nightly watch.
+# Answers "was any fishing vessel inside this protected area?" with NAMED vessels.
+# ⚠️ Sequential by design: the GFW token allows ONE in-flight request (any concurrency
+#    returns 429), and a region takes ~13 s. Full 1799-MPA coverage would be ~6.5 h, so
+#    MPAs >= --min-area are swept every run and the smaller tail rotates by date.
+python scripts/gfw_mpa_sweep.py                       # ~2.7 h: 748 MPAs >=1 km2 + 250 tail
+python scripts/gfw_mpa_sweep.py --dry-run --limit 5   # no token, no network
+python scripts/gfw_mpa_sweep.py --min-area 100 --tail-slice 0   # ~35 min, big MPAs only
 
 # Step 4: Fetch a Sentinel-2 scene for an MPA (or explicit bbox) and tile it into
 # georeferenced RGB chips under data/raw/sentinel2/ (Planetary Computer — no credentials)
@@ -159,18 +170,22 @@ Every P3 ingester has a `--dry-run` (or a local-file path) that works with neith
 
 ## CI / Automation
 
-`.github/workflows/gfw.yml` runs `scripts/gfw_fetch.py` on:
-- `workflow_dispatch` (manual trigger)
+`.github/workflows/gfw.yml` ("GFW MPA Sweep") runs `scripts/gfw_mpa_sweep.py` on:
+- `workflow_dispatch` (manual; inputs for `min_area`, `tail_slice`, `max_minutes`, `limit`)
 - `schedule: cron '0 0 * * *'` (daily at 00:00 UTC)
 
-The workflow uses Python 3.11 with `actions/setup-python@v5` pip caching (keyed on `requirements.txt`), installs deps via `pip install -r requirements.txt`, reads `GFW_API_TOKEN` from GitHub secrets, and uploads `data/raw/gfw/` as the `gfw-fishing-effort-report` artifact with `if-no-files-found: error` (CI fails loudly if no file was written).
+It installs **only** the pinned `requests` + `python-dotenv` (not all of `requirements.txt`) because the sweep reads the committed `data/processed/mpa_index.csv` rather than the GeoPackage — so the nightly never pulls geopandas/GDAL. It writes the digest to `$GITHUB_STEP_SUMMARY`, uploads `data/raw/gfw_mpa/` as the `gfw-mpa-sweep` artifact (`if: always()`, 90-day retention, so a partial run's file survives for diagnosis), and on failure opens **one rolling GitHub issue** labelled `nightly-failure`, commenting on it rather than filing a new issue per night (`permissions: issues: write`). `timeout-minutes: 340` sits under GitHub's 360-minute ceiling and above the script's own 300-minute `--max-minutes` budget; a `concurrency` group stops a manual run overlapping the scheduled one and fighting over the token's single-request allowance.
 
-`.github/workflows/tests.yml` runs the **offline test suite** on every `push` + `pull_request` (and `workflow_dispatch`): `python -m compileall -q scripts` (a syntax gate over *every* script, including the heavy ML/geo ones — `compileall` parses without importing) then `python -m unittest discover -s scripts/tests` (**280 offline tests**). It needs **no credentials and no `pip install`** — the suite is pure stdlib (the P3 ingesters soft-import `python-dotenv` and lazy-import `requests`/`websocket-client`, `scripts/_http.py` lazy-imports `requests`/`urllib3` inside `build_session`, and `eval_holdout.py`/`conf_sweep.py` lazy-import `ultralytics` inside `load_yolo()`), so **keep new tests dependency-free**; `test_http.py` and `test_eval_holdout.py` each have a guard test that fails if those modules regain a module-level `import requests` / `import ultralytics`. ⚠️ A test needing numpy/PIL (or anything else unavailable in a bare CI job) must **skip**, not fail — `test_chip_postprocess.py` shows the pattern: stdlib-only source-inspection guards always run, and the numeric assertions sit behind `@unittest.skipUnless`. This catches syntax errors in any script and P3 regressions that `gfw.yml` (which only runs `gfw_fetch.py`) would miss.
+⚠️ **What this workflow used to do, and why it looked healthy while doing nothing.** Until 2026-08-09 it ran `gfw_fetch.py` with its defaults: one unrelated EEZ (`8466`), `trawlers` only, and `date-range=[yesterday, yesterday]`. That range is **empty** (GFW's interval is half-open), so every nightly run uploaded `entries: [null]` and exited 0. Confirmed against the 2026-08-08 artifact. Three separate faults had to be fixed together — the empty range, the gear filter (values are **lowercase**; `trawlers` also excluded a real `OTHER_PURSE_SEINES` intrusion), and the region (an EEZ, not the MPAs the project is about).
+
+`.github/workflows/tests.yml` runs the **offline test suite** on every `push` + `pull_request` (and `workflow_dispatch`): `python -m compileall -q scripts` (a syntax gate over *every* script, including the heavy ML/geo ones — `compileall` parses without importing) then `python -m unittest discover -s scripts/tests` (**324 offline tests**). It needs **no credentials and no `pip install`** — the suite is pure stdlib (the P3 ingesters soft-import `python-dotenv` and lazy-import `requests`/`websocket-client`, `scripts/_http.py` lazy-imports `requests`/`urllib3` inside `build_session`, and `eval_holdout.py`/`conf_sweep.py` lazy-import `ultralytics` inside `load_yolo()`), so **keep new tests dependency-free**; `test_http.py` and `test_eval_holdout.py` each have a guard test that fails if those modules regain a module-level `import requests` / `import ultralytics`. ⚠️ A test needing numpy/PIL (or anything else unavailable in a bare CI job) must **skip**, not fail — `test_chip_postprocess.py` shows the pattern: stdlib-only source-inspection guards always run, and the numeric assertions sit behind `@unittest.skipUnless`. This catches syntax errors in any script and P3 regressions that `gfw.yml` (which only runs the MPA sweep) would miss.
 
 ## Data Layout
 
 - `data/raw/WDPA/` — Raw WDPA September 2025 shapefiles, split into 3 parts (`WDPA_Sep2025_Public_shp_0`, `_1`, `_2`) due to size. These are gitignored.
-- `data/raw/gfw/` — Per-run GFW 4WINGS API responses written by `gfw_fetch.py` as `gfw_report_<UTC-timestamp>.json`. Gitignored; surfaced via the CI artifact.
+- `data/raw/gfw/` — Per-run GFW 4WINGS API responses written by `gfw_fetch.py` as `gfw_report_<UTC-timestamp>.json`. Gitignored.
+- `data/raw/gfw_mpa/` — Per-run MPA sweep results from `gfw_mpa_sweep.py` as `gfw_mpa_sweep_<UTC-timestamp>.json`: `{generated_utc, source: "gfw-4wings-mpa", window:{start,end,end_exclusive}, query, coverage, mpas_queried, mpas_with_effort, errors, events:[…]}`. Each event is one **(MPA, vessel)** pair — `wdpa_pid`/`mpa_name`/`iso3`/`iucn_cat` plus `mmsi`/`vessel_name`/`flag`/`gear_type`/`imo`/`callsign`, `fishing_hours`, `entry_timestamp`/`exit_timestamp`, `lat`/`lon`, and `cells` (how many 4WINGS cells were summed). The `coverage` block records what the run actually reached (`priority_count`, `tail_slice`, `skipped`, `budget_exhausted`) so a truncated sweep can never read as full coverage. Gitignored; surfaced via the CI artifact.
+- `data/processed/mpa_index.csv` — **Committed**, geometry-free index of the 1,799 filtered MPAs (`WDPA_PID, WDPAID, NAME, ISO3, IUCN_CAT, MARINE, GIS_M_AREA`), written by `prep_polygons.py` beside the GeoPackage. Exists so `gfw_mpa_sweep.py` can drive per-MPA API calls with stdlib `csv` in CI, where geopandas/GDAL would be dead weight and the raw WDPA shapefiles are unavailable. The GeoPackage remains the source of truth for anything spatial.
 - `data/raw/ais/` — Normalized AIS position snapshots as `ais_positions_<UTC-timestamp>_<label>.json`: `{generated_utc, source, bbox_wgs84, ..., positions:[{mmsi, lon, lat, timestamp, sog, cog, name?}]}`. The `positions` list is the AIS input contract `fuse_violations.py --ais` reads. Written by `aisstream_fetch.py` (`source: "aisstream"`, live) and `marinecadastre_fetch.py` (`source: "marinecadastre"`, historical US-waters archive) — same dir + contract. Gitignored.
 - `data/raw/ais_fishing/` — Locally-inferred fishing records written by `ais_fishing.py` as `ais_fishing_<UTC-timestamp>.json`. The **same vessel-records contract** as `data/raw/gfw_vessels/` (so `fuse_violations.py --vessels` and `geofence_ais.py --vessels` read either), but derived from AIS movement instead of the GFW API — `source: "ais-heuristic"`, identity fields null, plus heuristic diagnostics (`straightness`, `observed_hours`, `intervals_used`, `insufficient_data`). Gitignored.
 - `data/raw/ais_geofence/` — AIS-only in-MPA events written by `geofence_ais.py` as `geofence_events_<UTC-timestamp>.json` (+ `.geojson` of the reported points). The **`violation_events.json` schema** with `ais_status: "reported"`, `detection_id`/`chip` null and `duration_hours` populated. Not tied to an imagery run — AIS plus an MPA polygon produce it alone. Gitignored.
@@ -192,7 +207,8 @@ Each data stream has its own script. Do not mix data-stream concerns across scri
 |--------|-------------|-------------|
 | `prep_polygons.py` | WDPA / MPA boundaries | Filters raw WDPA shapefiles → GeoPackage |
 | `view_polygons.py` | Visualization | Overlays processed MPAs on a world map |
-| `gfw_fetch.py` | Global Fishing Watch API | Queries GFW 4WINGS API for fishing effort by vessel |
+| `gfw_fetch.py` | Global Fishing Watch API | Queries GFW 4WINGS API for fishing effort by vessel over ONE named region (default an EEZ). ⚠️ `--end` is EXCLUSIVE |
+| `gfw_mpa_sweep.py` | GFW × MPA intrusion (nightly) | Sweeps every marine Ia/Ib MPA against 4WINGS via the `public-mpa-all` context layer — whose `idProperty` is `SITE_PID`, i.e. our own `WDPA_PID`, so no mapping table is needed — and emits per-(MPA, vessel) intrusion records. **Sequential by force**: the token allows one in-flight request; any concurrency returns 429 |
 | `sat_fetch.py` | Sentinel-2 optical imagery | Fetches an AOI-clear recent S2 L2A true-color scene from Planetary Computer STAC for a bbox/MPA and tiles it into georeferenced RGB chips |
 | `detect_boats.py` | Ship detection (stage 2) | Runs the YOLOv8 boat detector over a run dir's chips, geolocates + dedups boxes, writes `detections.json`/`.geojson` |
 | `sar_seed.py` | SAR candidate seeding (stage 2, S1) | Classical Sentinel-1 vessel detector (dual-pol saturation + coherent-blob) that seeds `detections.json` for the SAR review loop when no `best_sar.pt` exists yet. ⚠️ **Now superseded by `detect_boats.py --weights best_sar.pt` wherever the region is in-domain** — on 2026-08-05 a seed run that had reported **0 and 1** candidates (Ras Tanura / Durban) was re-run with `sar-deep3` and found **15 and 12**, and human review then confirmed **58 and 7** real vessels. A seed "found nothing" is evidence about the seed, **not** about the water; do not write a region off on it |

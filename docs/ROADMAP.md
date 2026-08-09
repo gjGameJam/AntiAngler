@@ -30,7 +30,7 @@ read **cold**, with no prior conversation context._
 | **Optical detector** | `data/training/weights/best.pt` = **`finetune-w4ionian`** (promoted 2026-08-06, W4). YOLOv8n-**P2** on Sentinel-2 10 m RGB. **Deploy: `imgsz 1024`, `conf 0.20`** — baked into `detect_boats.py` defaults. The conf did **not** move at this promotion, but it was still re-swept on all four holdouts for both models; "unchanged" is a measurement, not an inheritance. Backup: `best_finetune-adriatic.pt`. |
 | **SAR detector** | `data/training/weights/best_sar.pt` = **`sar-peak2`** (promoted 2026-08-06, W12). **Deploy: `imgsz 1024`, `conf 0.20`.** 🚨 **The SAR pipeline is DESPECKLED end-to-end** — every S1 fetch must pass `sat_fetch.py --provider s1 --despeckle peak`. Backup: `best_sar_deep4.pt`. |
 | **Phase 3 (AIS fusion)** | All stages built, offline-tested, live-validated (2026-07-26), and **run end-to-end on real data** (2026-08-06, W3-B) producing all three statuses in one scene. |
-| **Offline test suite** | **280 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
+| **Offline test suite** | **324 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
 | **Eval / gating harness** | `eval_holdout.py` + `conf_sweep.py`, modality-agnostic via `--train-dir`. `PROMOTED_BY_TREE` stops an optical checkpoint leaking into a SAR gate. |
 | **Code health** | All `docs/AUDIT.md` P1/P2 findings closed. The P3 items are conscious house-style deferrals, not debt. |
 

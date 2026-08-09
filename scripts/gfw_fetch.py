@@ -40,9 +40,10 @@ def parse_args(argv=None):
     p.add_argument("--region-dataset",
                    default=env_or("GFW_REGION_DATASET", "public-eez-areas"))
     p.add_argument("--start", default=env_or("GFW_START", None),
-                   help="YYYY-MM-DD. Defaults to yesterday UTC.")
+                   help="YYYY-MM-DD, INCLUSIVE. Defaults to yesterday UTC.")
     p.add_argument("--end", default=env_or("GFW_END", None),
-                   help="YYYY-MM-DD. Defaults to yesterday UTC.")
+                   help="YYYY-MM-DD, EXCLUSIVE (GFW's date-range is half-open [start, end)). "
+                        "Defaults to today UTC, so the default window covers yesterday.")
     p.add_argument("--gear", default=env_or("GFW_GEAR", "trawlers"),
                    help="Comma-separated list, e.g. 'trawlers,longliners'.")
     p.add_argument("--group-by", default=env_or("GFW_GROUP_BY", "VESSEL_ID"))
@@ -77,9 +78,28 @@ def validate_date(label, value):
 
 
 def resolve_date_range(args):
-    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
-    start = validate_date("start", args.start) or yesterday
-    end = validate_date("end", args.end) or yesterday
+    """Resolve the (start, end) query window. ``end`` is EXCLUSIVE.
+
+    ⚠️ GFW's ``date-range=A,B`` is a half-open interval **[A, B)**. Measured 2026-08-09
+    against a known intrusion (a vessel entered Nordaust-Svalbard at 2026-08-03T05:00Z):
+
+        date-range=2026-08-03,2026-08-03  ->  0 rows
+        date-range=2026-08-03,2026-08-04  ->  2 rows
+
+    The old default set both ends to *yesterday*, i.e. the empty interval — so **every**
+    nightly cron run since this script was written returned ``entries: [null]`` while
+    exiting 0. A zero-width range is now a hard error rather than a silent empty report,
+    and the default covers yesterday properly by ending today."""
+    today = datetime.now(timezone.utc).date()
+    start = validate_date("start", args.start) or (today - timedelta(days=1)).isoformat()
+    end = validate_date("end", args.end) or today.isoformat()
+    if start == end:
+        raise ValueError(
+            f"--start and --end are both {start}, which is an EMPTY range: GFW treats "
+            f"date-range=A,B as half-open [A, B), so it would return no rows. Pass an "
+            f"--end at least one day after --start (to cover {start}, use --end "
+            f"{(datetime.strptime(start, '%Y-%m-%d').date() + timedelta(days=1)).isoformat()})."
+        )
     if start > end:
         raise ValueError(f"--start ({start}) must not be after --end ({end})")
     return start, end

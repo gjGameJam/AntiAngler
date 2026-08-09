@@ -51,16 +51,30 @@ class TestDateHandling(unittest.TestCase):
         with self.assertRaises(ValueError):
             gf.validate_date("end", "2026-13-40")
 
-    def test_resolve_defaults_to_yesterday(self):
+    def test_resolve_default_window_covers_yesterday(self):
+        """Default is [yesterday, today) — a ONE-DAY-WIDE half-open interval.
+
+        Regression lock for the bug that made every nightly cron run return no rows:
+        the default used to be [yesterday, yesterday), which GFW reads as empty."""
         args = gf.parse_args([])
         start, end = gf.resolve_date_range(args)
-        yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
-        self.assertEqual(start, yesterday)
-        self.assertEqual(end, yesterday)
+        today = datetime.now(timezone.utc).date()
+        self.assertEqual(start, (today - timedelta(days=1)).isoformat())
+        self.assertEqual(end, today.isoformat())
+        self.assertNotEqual(start, end, "default range must not be zero-width")
 
     def test_resolve_explicit_range(self):
         args = gf.parse_args(["--start", "2026-01-01", "--end", "2026-01-31"])
         self.assertEqual(gf.resolve_date_range(args), ("2026-01-01", "2026-01-31"))
+
+    def test_resolve_rejects_zero_width_range(self):
+        """start == end is an empty half-open interval; fail loudly, never query it."""
+        args = gf.parse_args(["--start", "2026-01-01", "--end", "2026-01-01"])
+        with self.assertRaises(ValueError) as ctx:
+            gf.resolve_date_range(args)
+        msg = str(ctx.exception)
+        self.assertIn("EMPTY range", msg)
+        self.assertIn("2026-01-02", msg, "error should name the fix")
 
     def test_resolve_rejects_inverted_range(self):
         args = gf.parse_args(["--start", "2026-02-01", "--end", "2026-01-01"])

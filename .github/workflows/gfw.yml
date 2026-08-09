@@ -1,39 +1,133 @@
-name: GFW Data Pipeline
+name: GFW MPA Sweep
+
+# Asks, for every marine IUCN Ia/Ib MPA we track, "was any fishing vessel inside it?" and
+# answers with named vessels (see scripts/gfw_mpa_sweep.py for the measured API notes).
+#
+# History worth keeping: this workflow used to run `gfw_fetch.py` with its defaults, which
+# queried ONE unrelated EEZ, filtered to trawlers only, and asked for the date range
+# [yesterday, yesterday] — an EMPTY half-open interval. It exited 0 every night and
+# uploaded `entries: [null]`. Green, and fetching nothing, for months.
+#
+# Runtime: the GFW token permits only ONE in-flight request (any concurrency returns 429),
+# and a region takes ~13s, so the sweep is sequential and long-running by nature. The
+# script's own --max-minutes budget stops it well inside the job timeout and reports what
+# it did not reach.
 
 on:
-  workflow_dispatch: # This lets you run it manually with a button
+  workflow_dispatch:
+    inputs:
+      min_area:
+        description: 'Sweep every MPA at least this many km2 (default 1.0)'
+        required: false
+        default: '1.0'
+      tail_slice:
+        description: 'How many sub-threshold MPAs to rotate through (default 250)'
+        required: false
+        default: '250'
+      max_minutes:
+        description: 'Stop sweeping after this many minutes (default 300)'
+        required: false
+        default: '300'
+      limit:
+        description: 'Cap total MPAs queried — for a quick smoke test (blank = no cap)'
+        required: false
+        default: ''
   schedule:
-    - cron: '0 0 * * *' # Runs daily at midnight
+    - cron: '0 0 * * *' # Daily at midnight UTC
+
+# Least privilege: read the repo, and open/comment on an issue when a run fails.
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  # A sweep can run for hours; never let a scheduled run overlap a manual one and have the
+  # two fight over the token's single-request allowance.
+  group: gfw-mpa-sweep
+  cancel-in-progress: false
 
 jobs:
-  fetch-data:
+  sweep:
     runs-on: ubuntu-latest
+    # GitHub's hosted-runner ceiling is 360 min. Leave headroom above the script's own
+    # 300-minute default budget so it always exits cleanly rather than being killed.
+    timeout-minutes: 340
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: requirements.txt
 
       - name: Install Dependencies
-        run: pip install -r requirements.txt
+        # The sweep is stdlib apart from requests (and a soft-imported python-dotenv), and
+        # reads the committed data/processed/mpa_index.csv rather than the GeoPackage — so
+        # the nightly does NOT need geopandas/rasterio/GDAL. Versions still come from the
+        # pinned requirements.txt so CI matches local.
+        run: |
+          pip install \
+            "$(grep -iE '^requests==' requirements.txt)" \
+            "$(grep -iE '^python-dotenv==' requirements.txt)"
 
-      - name: Run GFW Fetch Script
+      - name: Sweep MPAs for fishing effort
         env:
           GFW_API_TOKEN: ${{ secrets.GFW_API_TOKEN }}
-          # Optional overrides — see `python scripts/gfw_fetch.py --help`:
-          # GFW_REGION_ID, GFW_REGION_DATASET, GFW_START, GFW_END, GFW_GEAR,
-          # GFW_GROUP_BY, GFW_SPATIAL_RESOLUTION, GFW_TEMPORAL_RESOLUTION,
-          # GFW_FORMAT, GFW_DATASET
-        run: python scripts/gfw_fetch.py
+          GFW_MPA_MIN_AREA: ${{ inputs.min_area || '1.0' }}
+          GFW_MPA_TAIL_SLICE: ${{ inputs.tail_slice || '250' }}
+          GFW_MPA_MAX_MINUTES: ${{ inputs.max_minutes || '300' }}
+        run: |
+          python scripts/gfw_mpa_sweep.py \
+            --summary-md "$GITHUB_STEP_SUMMARY" \
+            ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }}
 
       - name: Upload Results
+        # if: always() — a run that failed partway still wrote whatever it collected, and
+        # that partial file is exactly what you want when diagnosing the failure.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gfw-fishing-effort-report
-          path: data/raw/gfw/
-          if-no-files-found: error
+          name: gfw-mpa-sweep
+          path: data/raw/gfw_mpa/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Open an issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          LABEL="nightly-failure"
+          # Idempotent: the label may not exist yet, and must not fail the step if it does.
+          gh label create "$LABEL" --color B60205 \
+            --description "A scheduled workflow run failed" 2>/dev/null || true
+
+          BODY="The scheduled GFW MPA sweep failed.
+
+          Run: $RUN_URL
+          Commit: \`${GITHUB_SHA}\`
+
+          Common causes, most likely first:
+          - **HTTP 429 on most regions** — something raised concurrency above 1. The GFW
+            token allows only one in-flight request; \`--workers\` must stay at 1.
+          - **Missing/expired \`GFW_API_TOKEN\`** secret.
+          - **Empty date range** — GFW's \`date-range\` is half-open [start, end), so a
+            zero-width window returns nothing.
+
+          This issue stays open until closed by hand; later failures are added as comments."
+
+          # One rolling issue rather than a new one per night — a nightly job that breaks
+          # tends to break for many nights, and 30 identical issues help nobody.
+          EXISTING=$(gh issue list --state open --label "$LABEL" --limit 1 \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "Nightly GFW MPA sweep failed" \
+              --label "$LABEL" --body "$BODY"
+          fi
