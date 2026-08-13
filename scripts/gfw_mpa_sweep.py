@@ -89,7 +89,33 @@ DEFAULT_WORKERS = 1
 # Hence the two-tier, capacity-aware design in select_mpas().
 DEFAULT_MIN_AREA_KM2 = 1.0
 DEFAULT_MAX_MINUTES = 300.0
-DEFAULT_RATE_S = 24.0
+
+# Recalibrated 2026-08-12 from three real nightly runs. The original 24s came from timing
+# the 30 LARGEST MPAs, and request time scales with polygon size, so it roughly doubled the
+# true cost of a mixed sweep and halved the capacity:
+#   08-10  750 regions / 140 min = 11.2 s
+#   08-11  750 regions / 107 min =  8.6 s
+#   08-12  750 regions / 133 min = 10.6 s
+# 13s = the measured ~11s plus the pacing delay below.
+DEFAULT_RATE_S = 13.0
+
+# ⚠️ Even at workers=1 the API intermittently 429s, and the failure rate scales INVERSELY
+# with wall time — the fastest of the three nights failed by far the most:
+#   08-11   8.6 s/region -> 276/750 errored (37%)  -> run FAILED the error gate
+#   08-10  11.2 s/region ->  70/750 errored (9.3%)
+#   08-12  10.6 s/region ->  26/750 errored (3.5%)
+# So deliberately slowing down buys reliability. This is NOT contradicted by the 2026-08-09
+# finding that pacing does not rescue CONCURRENT requests: concurrency is rejected outright,
+# whereas at concurrency 1 the limiter is merely brushed and backing off clears it.
+DEFAULT_MIN_INTERVAL_S = 2.0
+
+# Longer than _http's 1.0 default (0s/2s/4s) because the thing being retried here is a rate
+# limiter, not a transient 5xx — 3.0 gives 0s/6s/12s.
+DEFAULT_RETRY_BACKOFF = 3.0
+
+# 748 priority + 550 tail = ~1298 regions ~= 281 min at 13s, inside the 300-min budget,
+# and it cycles the 1051-MPA tail every 2 runs instead of every 526.
+DEFAULT_TAIL_SLICE = 550
 
 
 def load_env():
@@ -129,10 +155,13 @@ def parse_args(argv=None):
                         f"(default {DEFAULT_MIN_AREA_KM2}). Smaller ones form the rotating "
                         f"tail — the median Ia/Ib MPA is 0.42 km2, below what GFW's "
                         f"AIS-derived effort can resolve. 0 sweeps everything every run.")
-    p.add_argument("--tail-slice", type=int, default=int(env_or("GFW_MPA_TAIL_SLICE", 250)),
-                   help="How many below-threshold MPAs to include per run, rotating by "
-                        "date so the whole tail is covered over successive runs "
-                        "(default 250). 0 disables the tail.")
+    p.add_argument("--tail-slice", type=int,
+                   default=int(env_or("GFW_MPA_TAIL_SLICE", DEFAULT_TAIL_SLICE)),
+                   help=f"How many below-threshold MPAs to include per run, rotating by "
+                        f"date so the whole tail is covered over successive runs "
+                        f"(default {DEFAULT_TAIL_SLICE} — with the 748 MPAs >= 1 km2 that "
+                        f"is ~1300 regions, inside the budget, and cycles the 1051-MPA "
+                        f"tail every 2 runs). 0 disables the tail.")
     p.add_argument("--max-minutes", type=float,
                    default=float(env_or("GFW_MPA_MAX_MINUTES", DEFAULT_MAX_MINUTES)),
                    help=f"Stop sweeping after this many minutes and report what was "
@@ -168,7 +197,15 @@ def parse_args(argv=None):
     p.add_argument("--retries", type=int, default=int(env_or("GFW_MPA_RETRIES",
                                                              _http.DEFAULT_TOTAL)))
     p.add_argument("--retry-backoff", type=float,
-                   default=float(env_or("GFW_MPA_RETRY_BACKOFF", _http.DEFAULT_BACKOFF_FACTOR)))
+                   default=float(env_or("GFW_MPA_RETRY_BACKOFF", DEFAULT_RETRY_BACKOFF)),
+                   help=f"Backoff factor between retries (default {DEFAULT_RETRY_BACKOFF} "
+                        f"-> 0s, 6s, 12s). Higher than the shared default because what is "
+                        f"being retried here is a rate limiter, not a transient 5xx.")
+    p.add_argument("--min-interval-s", type=float,
+                   default=float(env_or("GFW_MPA_MIN_INTERVAL_S", DEFAULT_MIN_INTERVAL_S)),
+                   help=f"Minimum seconds between request starts (default "
+                        f"{DEFAULT_MIN_INTERVAL_S}; 0 disables). The API 429s more the "
+                        f"faster the sweep runs, so this trades runtime for reliability.")
     p.add_argument("--insecure-tls", action="store_true",
                    help="Skip TLS verification (corporate/AV interception). Last resort.")
     p.add_argument("--dry-run", action="store_true",
@@ -503,6 +540,39 @@ def write_json_atomic(path, data):
 
 # ------------------------------------------------------------------------------- network
 
+class Pacer:
+    """Hold request STARTS to at most one per ``interval`` seconds.
+
+    Not a substitute for the concurrency limit (which is 1 — see DEFAULT_WORKERS) but a
+    second, softer brake: at concurrency 1 the API still 429s intermittently, and the
+    measured failure rate falls as the run slows down. Thread-safe so it still holds if a
+    future token permits real concurrency.
+
+    ``interval <= 0`` disables it and ``wait()`` becomes a no-op."""
+
+    def __init__(self, interval=DEFAULT_MIN_INTERVAL_S, sleep=time.sleep,
+                 clock=time.monotonic):
+        self.interval = interval
+        self._sleep = sleep
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._next_at = 0.0
+
+    def wait(self):
+        """Block until this caller's slot is due. Returns the seconds actually slept."""
+        if self.interval <= 0:
+            return 0.0
+        with self._lock:
+            now = self._clock()
+            due = max(now, self._next_at)
+            self._next_at = due + self.interval
+        delay = due - self._clock()
+        if delay > 0:
+            self._sleep(delay)
+            return delay
+        return 0.0
+
+
 _local = threading.local()
 
 
@@ -516,9 +586,11 @@ def _session(policy, headers, verify):
     return sess
 
 
-def query_mpa(mpa, params, policy, headers, timeout, verify):
+def query_mpa(mpa, params, policy, headers, timeout, verify, pacer=None):
     """Query one MPA. Returns (events, error_or_None) — never raises for one region."""
     pid = str(mpa.get("WDPA_PID", "")).strip()
+    if pacer is not None:
+        pacer.wait()
     try:
         resp = _session(policy, headers, verify).post(
             GFW_REPORT_URL, params=params,
@@ -540,7 +612,7 @@ def query_mpa(mpa, params, policy, headers, timeout, verify):
 
 
 def sweep(mpas, params, policy, headers, timeout, verify, workers=DEFAULT_WORKERS,
-          deadline=None, progress_every=50):
+          deadline=None, progress_every=50, pacer=None):
     """Query each MPA in turn; collect events, per-region errors, and anything skipped.
 
     Runs in chunks of ``workers`` so the time budget can be checked between chunks. With
@@ -563,8 +635,8 @@ def sweep(mpas, params, policy, headers, timeout, verify, workers=DEFAULT_WORKER
                 return events, errors, skipped
             chunk = mpas[i:i + step]
             i += len(chunk)
-            for fut in [pool.submit(query_mpa, m, params, policy, headers, timeout, verify)
-                        for m in chunk]:
+            for fut in [pool.submit(query_mpa, m, params, policy, headers, timeout,
+                                    verify, pacer) for m in chunk]:
                 got, err = fut.result()
                 events.extend(got)
                 if err:
@@ -614,8 +686,10 @@ def main(argv=None):
     print(f"  gear:     {args.gear or 'ALL (no filter)'}")
     print(f"  workers:  {args.workers}"
           + ("" if args.workers == 1 else "  WARNING: >1 triggers HTTP 429 on this token"))
-    print(f"  budget:   {args.max_minutes or 'none'} min "
-          f"(~{len(mpas) * 13 / 60:.0f} min estimated at ~13s/MPA)")
+    print(f"  budget:   {args.max_minutes or 'none'} min (~"
+          f"{len(mpas) * args.rate_estimate_s / 60:.0f} min estimated at "
+          f"~{args.rate_estimate_s:g}s/MPA)")
+    print(f"  pacing:   {args.min_interval_s:g}s minimum between requests")
 
     if args.dry_run:
         print("\n--dry-run: no token read, no request sent. Params:")
@@ -645,7 +719,8 @@ def main(argv=None):
     started = datetime.now(timezone.utc)
     deadline = (time.monotonic() + args.max_minutes * 60) if args.max_minutes else None
     raw_events, errors, skipped = sweep(mpas, params, policy, headers, args.timeout,
-                                        verify, args.workers, deadline)
+                                        verify, args.workers, deadline,
+                                        pacer=Pacer(args.min_interval_s))
     events = aggregate_events(raw_events, args.min_hours)
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
 

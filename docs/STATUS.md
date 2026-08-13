@@ -1,6 +1,6 @@
 # STATUS — boat detector / active-learning loop
 
-_Snapshot: **2026-08-06**. This is the **live state**: which model is promoted, what the gates say,
+_Snapshot: **2026-08-13**. This is the **live state**: which model is promoted, what the gates say,
 what is broken. For what was tried and what not to retry, see `ROADMAP.md`; for the build spec and
 data contracts, `PIPELINE.md`; for code-health findings, `AUDIT.md`; for per-script contracts and the
 full command list, `../CLAUDE.md`. Point-in-time — verify against code before trusting specifics._
@@ -42,12 +42,21 @@ full command list, `../CLAUDE.md`. Point-in-time — verify against code before 
   0.750** (6 TP / 2 FP), **recall 1.000** (6/6) at conf 0.20. The ORION AIS match is confirmed real.
   🚨 **But the one in-MPA dark candidate was a false positive on a nearshore rock** — see "Phase 3"
   below before citing this run. **The product has no validated in-MPA dark vessel yet.**
-- **Nothing is queued.** W1–W12 are all closed. See `ROADMAP.md` → RESULTS. The one **open question**
-  (not a work item, nobody has scoped it): find a scene that holds a *real* in-MPA dark vessel — that
-  is the last unproven link in the product story.
+- **GFW MPA nightly (W13, 2026-08-09→12):** the daily cron now sweeps every marine Ia/Ib MPA for
+  fishing effort and reports **named vessels**, replacing a job that had been green and fetching
+  **nothing** for months. **Live on `main`, three nightly runs in, finding real intrusions.**
+  ⚠️ **One of the three nights failed** (429 rate limiting) and **GitHub issue #1 is open** for it —
+  a fix is committed but **not yet proven by a nightly**. See "The GFW MPA nightly" below.
+- **W1–W12 are closed**; W13 is live but has **one open verification** (above). See `ROADMAP.md` →
+  RESULTS. The standing **open question** (not a work item, nobody has scoped it): find a scene that
+  holds a *real* in-MPA dark vessel — the last unproven link in the product story.
 
-### The two things most likely to bite next session
+### The three things most likely to bite next session
 
+0. **A green CI run is not evidence that anything was fetched.** The GFW cron passed every night for
+   months while returning `entries: [null]`, because `date-range=A,A` is an **empty half-open
+   interval**. Nothing alerted, because nothing had *failed*. When a scheduled job's purpose is to
+   collect data, assert on the **contents**, not the exit code.
 1. **Every SAR run on disk predates W12 and holds RAW chips** → out of domain for `sar-peak2`.
    A preprocessing mismatch costs **about two-thirds of recall and raises no error** (measured:
    `sar-deep4` on despeckled chips scores Gibraltar R 0.217 instead of 0.609). Re-fetch with
@@ -245,15 +254,82 @@ Three things that only reviewing could have told us:
 both refer to it, so leave it that way. `detections_wateronly.json` is the 7-detection `--water-only`
 re-run kept for the record, and `water_mask.tif` is the cached WorldCover mask (no refetch needed).
 `export_labels.py` reads only `reviews.json` + `manifest.json`, so the review is safe either way.
-**The 30 reviewed chips have not been exported** — `export_labels.py --run <that dir>` would add 6
-SB-Channel positives plus 24 hard negatives, including two genuine coastal-rock negatives of exactly
-the class that caused both errors. Nobody has decided whether to fold them in.
+**The 30 reviewed chips WERE exported 2026-08-13** to `data/processed/training_exports/2026-08-13/`:
+**7 positive chips (7 boxes) + 23 hard negatives**, including genuine coastal-rock negatives of
+exactly the class that caused both false positives. (Earlier notes estimated 6 positives / 24
+negatives; the extra positive is the reviewer's re-drawn box in the overlapping neighbour chip, which
+is a real vessel *in that chip* under the complete-labels rule.)
+
+(`data/processed/training_exports/` is **gitignored**, so this tag lives only on the local machine —
+it is not recoverable from a fresh clone. Re-running `export_labels.py` on that run dir regenerates
+it, since `reviews.json` is the durable artifact.)
+
+🚨 **Nothing downstream has been run.** The export is inert until `build_dataset.py` layers it in —
+but that also means **the next `build_dataset.py` run will pick this tag up silently**, changing the
+training set. If you rebuild for an unrelated reason, either expect this data in it or move the tag
+aside. To actually use it: `build_dataset.py` → `train.py --weights best` → `conf_sweep.py` →
+`eval_holdout.py` **looped over all four holdouts**. Until it clears that gate it means nothing; it
+is 30 chips against a 1,818-image training set, so do not expect a visible move.
 
 ⚠️ **"Dark" still does not mean "violation" here.** US AIS carriage is mandatory only for certain
 vessel classes, and the Channel Islands are full of small dive and recreational craft that legally
 carry none. The dark signal is only strong where any vessel is anomalous. Relatedly, `ais_fishing.py`
 scored ISLAND EXPLORER 0.36 because slow meandering reads as fishing-like — which is exactly what a
 dive or whale-watching boat does.
+
+---
+
+## The GFW MPA nightly (W13) — live, with one open verification
+
+`.github/workflows/gfw.yml` → `scripts/gfw_mpa_sweep.py`. Asks, for every marine Ia/Ib MPA,
+*"was any fishing vessel inside it?"* and answers with **named, flagged vessels and dwell times** —
+no imagery required. Merged to `main` and running nightly.
+
+**What it replaced.** The same workflow previously ran `gfw_fetch.py` with its defaults and had been
+**green while fetching nothing** since it was written. Three independent faults, all fixed together:
+
+| Fault | Evidence |
+|---|---|
+| `date-range=[yesterday, yesterday]` is an **empty** interval (GFW's range is half-open `[start, end)`) | A vessel entered Nordaust-Svalbard 2026-08-03T05:00Z: `08-03,08-03` → **0 rows**; `08-03,08-04` → 2 rows. The 2026-08-08 artifact is literally `entries: [null]` |
+| The `trawlers` gear filter hid real intrusions, and filter values are **lowercase** while responses report uppercase | `other_purse_seines` → 2 rows; `OTHER_PURSE_SEINES` → 0. Trawlers-only dropped a genuine purse-seiner |
+| The region was an unrelated **EEZ** (`8466`), not the MPAs the project exists for | GFW's `public-mpa-all` layer has `idProperty: SITE_PID` = our own `WDPA_PID`, so all 1,799 resolve with **no mapping table** |
+
+**Hard constraint: one request at a time.** Sequential calls returned 15/15 HTTP 200; 6 workers failed
+4/5 regions with 429, and 2 workers *paced to 0.29 req/s* still failed 9/12. It is not a quota problem
+(`x-ratelimit-daily-limit-requests: 50000`, ~170 used). Parallel matrix jobs cannot help — the limit is
+per **token**, not per runner. **Keep `--workers 1`.**
+
+**Three production nights** (750 regions each: 748 MPAs ≥1 km² + 2 tail):
+
+| Night | Wall | s/region | Failed regions | Result |
+|---|---|---:|---|---|
+| 08-10 | 140 min | 11.2 | 70 (9.3%) | ✅ 24 MPAs with effort, 127 vessel events |
+| **08-11** | **107 min** | **8.6** | **276 (36.8%)** | ❌ **failed the 25% error gate → issue #1** |
+| 08-12 | 133 min | 10.6 | 26 (3.5%) | ✅ 23 MPAs with effort, 119 vessel events |
+
+🚨 **The 429 rate scales INVERSELY with wall time** — the fastest night failed by far the most. This
+does *not* contradict the concurrency finding: concurrency is rejected outright, whereas at
+concurrency 1 the limiter is merely brushed and slowing down clears it.
+
+**The fix, committed 2026-08-12 but NOT YET PROVEN BY A NIGHTLY** — this is the one thing to check
+first next session:
+- `--min-interval-s` (default **2.0 s**) paces request starts; `--retry-backoff` raised to **3.0**
+  (0s/6s/12s) because what is being retried is a rate limiter, not a transient 5xx.
+- `--rate-estimate-s` **24 → 13**. The 24 s came from timing the **30 largest** MPAs, and request time
+  scales with polygon size, so it roughly doubled the true cost and halved capacity. Capacity is now
+  **1,384** regions, so `--tail-slice` rose to **550**: the run covers all 748 MPAs ≥1 km² **plus 550
+  of the 1,051 smaller ones**, cycling the whole tail every **2 runs** instead of every 526.
+
+**Verify next session:** `gh run list --workflow=gfw.yml` — expect ~1,298 regions in ~280 min with a
+low single-digit error count. If 429s persist, raise `--min-interval-s` before touching anything else.
+Then close issue #1 (it is open with 0 comments; the notification step is confirmed working).
+
+**Design notes that matter.** Selection is **capacity-aware**: if the time budget cannot fit the
+priority tier, the *tier itself* rotates by date rather than truncating at the same place every night,
+which would silently starve its smallest members forever while still reporting "everything above the
+threshold". Rotation is derived from the date, not a stored cursor, so the job is stateless. Every run
+reports its own coverage (`priority_rotating`, `skipped`, `budget_exhausted`) — a truncated sweep can
+never read as full coverage.
 
 ---
 
@@ -269,8 +345,17 @@ dive or whale-watching boat does.
    error, but a filter matching the *wrong real scene* is still silent. Always loop `--holdout` and
    pass `--conf` explicitly.
 4. **TLS interception** — every fetch needs the CA-bundle + `--insecure-tls` recipe below, and
-   `--insecure-tls` must be user-authorized each session.
-5. ~~The 8 SB Channel detections are unreviewed~~ — **CLOSED 2026-08-06.** All 30 chips reviewed:
+   `--insecure-tls` must be user-authorized each session. `git push` hits the same wall; this repo
+   now has a **local** `http.sslCAInfo` pointing at `scratch_logs/ca_avast_bundle_2026-08.pem`
+   (set 2026-08-09, repo-local rather than `--global`). If pushes start failing with "unable to get
+   local issuer certificate", the Avast root has rotated — rebuild the bundle per the recipe below.
+6. **The nightly GFW sweep 429s intermittently** — 1 of 3 nights failed. Pacing is committed but
+   unproven; see "The GFW MPA nightly" above. **GitHub issue #1 is open.**
+7. **The SB Channel chips are exported but NOT trained on** — see below. A new export tag is sitting
+   in `data/processed/training_exports/` that `build_dataset.py` **will pick up silently** on its
+   next run.
+5. ~~The 8 SB Channel detections are unreviewed~~ — **CLOSED 2026-08-06** (and the chips were
+   **exported 2026-08-13**, see below). All 30 chips reviewed:
    **precision 0.750** (6 TP / 2 FP), **recall 1.000** (6/6 distinct vessels). The ORION AIS match is
    confirmed real. 🚨 **But the one in-MPA dark candidate (Scorpion SMR) was a false positive on a
    rock** — the product loop has no validated in-MPA dark vessel yet. The water mask was then built
@@ -302,6 +387,17 @@ venv/Scripts/python.exe scripts/sat_fetch.py --bbox <minLon minLat maxLon maxLat
 **`git push` hits the same wall.** Point git at the same bundle — do **not** disable verification:
 ```bash
 git config --global http.sslCAInfo "C:/gtest/AntiAngler/scratch_logs/ca_avast_bundle_2026-08.pem"
+```
+
+**Inspect the GFW nightly** (no credentials needed — it is all GitHub API):
+```bash
+gh run list --workflow=gfw.yml --limit 5              # green/red history + wall time
+gh run view <run-id> --log | grep -E "capacity:|selected:|Swept"
+gh run download <run-id> --dir /tmp/sweep             # the full events JSON
+gh issue list --label nightly-failure                 # the rolling failure issue (#1 open)
+# Run it by hand against a handful of MPAs (no token needed for --dry-run):
+python scripts/gfw_mpa_sweep.py --dry-run --limit 5
+venv/Scripts/python.exe scripts/gfw_mpa_sweep.py --min-area 100 --tail-slice 0 --limit 8
 ```
 
 **Gate and promote an OPTICAL candidate** (sweep first — the deploy conf has moved both up and down,
@@ -361,6 +457,16 @@ venv/Scripts/python.exe scripts/sat_fetch.py --provider s1 --bbox <...> --despec
 
 ## Repo state
 
-Work is on branch **`sar-deep3-and-roadmap-closeout`**, not merged to `main`. The 2026-08-06 session
-(W4, W12, W3-B, the W3-B chip review, the split-leak fix, and this documentation pass) is
-**uncommitted**.
+_Snapshot 2026-08-13. Everything below was verified against `git` and the GitHub Actions API, not
+from memory._
+
+- **`main` is current.** The `sar-deep3-and-roadmap-closeout` branch (W4, W12, W3-B, the chip review,
+  the split-leak fix, and the W13 nightly rebuild) **has been merged** — `git rev-list --count
+  origin/main..HEAD` is 0. The earlier note claiming this work was "uncommitted" was stale.
+- The nightly workflow therefore runs the **new** sweep; scheduled workflows only ever run from the
+  default branch, which is why the merge was the step that actually made the fix live.
+- **Uncommitted right now:** the 2026-08-12 pacing/capacity tuning, the SB Channel export tag, and
+  this documentation pass — commit them before clearing context.
+- Offline suite: **335 tests** (`python -m unittest discover -s scripts/tests`), pure stdlib.
+- **GitHub issue #1 is OPEN** — the 2026-08-11 nightly failure. Close it once a nightly passes with
+  the pacing fix in place.

@@ -387,6 +387,84 @@ class TestSummarizeMarkdown(unittest.TestCase):
         self.assertIn("Odd \\| Name", md)
 
 
+class TestPacer(unittest.TestCase):
+    """Second brake on the API, added 2026-08-12 after three nightly runs showed the 429
+    rate scaling INVERSELY with wall time (08-11 at 8.6 s/region errored 37%; 08-12 at
+    10.6 s/region errored 3.5%). Uses an injected clock so the test does not really sleep."""
+
+    class FakeClock:
+        def __init__(self):
+            self.t = 0.0
+            self.slept = []
+
+        def __call__(self):
+            return self.t
+
+        def sleep(self, d):
+            self.slept.append(d)
+            self.t += d
+
+    def test_spaces_successive_calls_by_the_interval(self):
+        clock = self.FakeClock()
+        pacer = ms.Pacer(2.0, sleep=clock.sleep, clock=clock)
+        for _ in range(3):
+            pacer.wait()
+        # First call is free; each later one waits out the remaining interval.
+        self.assertEqual(clock.slept, [2.0, 2.0])
+        self.assertEqual(clock.t, 4.0)
+
+    def test_slow_caller_is_not_delayed_further(self):
+        """If the work already took longer than the interval, do not add more delay."""
+        clock = self.FakeClock()
+        pacer = ms.Pacer(2.0, sleep=clock.sleep, clock=clock)
+        pacer.wait()
+        clock.t += 30.0          # a slow request
+        self.assertEqual(pacer.wait(), 0.0)
+        self.assertEqual(clock.slept, [])
+
+    def test_zero_interval_disables_pacing(self):
+        clock = self.FakeClock()
+        pacer = ms.Pacer(0.0, sleep=clock.sleep, clock=clock)
+        for _ in range(5):
+            self.assertEqual(pacer.wait(), 0.0)
+        self.assertEqual(clock.slept, [])
+
+    def test_negative_interval_is_also_a_no_op(self):
+        clock = self.FakeClock()
+        self.assertEqual(ms.Pacer(-1.0, sleep=clock.sleep, clock=clock).wait(), 0.0)
+
+
+class TestTunedDefaults(unittest.TestCase):
+    """Locks the numbers derived from production runs, so a future edit that reverts them
+    has to do so deliberately. See the constants' comments for the measurements."""
+
+    def test_sequential_by_default(self):
+        self.assertEqual(ms.parse_args([]).workers, 1,
+                         "any concurrency is rejected with 429 by the GFW token")
+
+    def test_pacing_on_by_default(self):
+        self.assertGreater(ms.parse_args([]).min_interval_s, 0)
+
+    def test_retry_backoff_longer_than_the_shared_default(self):
+        import _http
+        self.assertGreater(ms.parse_args([]).retry_backoff, _http.DEFAULT_BACKOFF_FACTOR)
+
+    def test_capacity_fits_the_priority_tier_and_a_real_tail_slice(self):
+        """The 24s estimate (timed on the 30 LARGEST MPAs) halved capacity and starved the
+        tail to 2 MPAs a night. At the measured rate the whole tail cycles in a few runs."""
+        args = ms.parse_args([])
+        capacity = int(args.max_minutes * 60 / args.rate_estimate_s)
+        rows = ([mpa(f"big{i}", area=5.0) for i in range(748)] +
+                [mpa(f"small{i}", area=0.1) for i in range(1051)])
+        sel, meta = ms.select_mpas(rows, args.min_area, args.tail_slice,
+                                   day_ordinal=0, capacity=capacity)
+        self.assertFalse(meta["priority_rotating"], "budget must fit the priority tier")
+        self.assertEqual(meta["priority_count"], 748)
+        self.assertGreater(meta["tail_slice"], 500)
+        self.assertLessEqual(len(sel), capacity)
+        self.assertLessEqual(meta["tail_cycle_runs"], 3, "tail should cycle in a few runs")
+
+
 class TestWriteJsonAtomic(unittest.TestCase):
     def test_writes_and_leaves_no_tmp(self):
         d = Path(tempfile.mkdtemp())

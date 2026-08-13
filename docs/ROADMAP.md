@@ -1,9 +1,10 @@
 # ROADMAP — improving the detector & building the MPA-violation product
 
-_Snapshot: **2026-08-06** (verified against code and against real eval runs, not memory). Written to be
-read **cold**, with no prior conversation context._
+_Snapshot: **2026-08-13** (verified against code, real eval runs and the live GitHub Actions history —
+not memory). Written to be read **cold**, with no prior conversation context._
 
-> **W1–W12 are all closed.** Nothing is queued. Both detectors are promoted at swept operating points,
+> **W1–W13 are closed** (W13 has one open *verification*, not open build work — see THE WORK QUEUE).
+> Both detectors are promoted at swept operating points,
 > Phase 3 has run end-to-end on real data **and its detections are now reviewed** (W3-B: precision
 > 0.750, recall 1.000), and all AUDIT P1/P2 findings are closed. What remains in
 > this file is (a) the current state, (b) a one-line result per closed item, (c) the long-form outcomes
@@ -30,11 +31,12 @@ read **cold**, with no prior conversation context._
 | **Optical detector** | `data/training/weights/best.pt` = **`finetune-w4ionian`** (promoted 2026-08-06, W4). YOLOv8n-**P2** on Sentinel-2 10 m RGB. **Deploy: `imgsz 1024`, `conf 0.20`** — baked into `detect_boats.py` defaults. The conf did **not** move at this promotion, but it was still re-swept on all four holdouts for both models; "unchanged" is a measurement, not an inheritance. Backup: `best_finetune-adriatic.pt`. |
 | **SAR detector** | `data/training/weights/best_sar.pt` = **`sar-peak2`** (promoted 2026-08-06, W12). **Deploy: `imgsz 1024`, `conf 0.20`.** 🚨 **The SAR pipeline is DESPECKLED end-to-end** — every S1 fetch must pass `sat_fetch.py --provider s1 --despeckle peak`. Backup: `best_sar_deep4.pt`. |
 | **Phase 3 (AIS fusion)** | All stages built, offline-tested, live-validated (2026-07-26), and **run end-to-end on real data** (2026-08-06, W3-B) producing all three statuses in one scene. |
-| **Offline test suite** | **327 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
+| **GFW MPA nightly** | **W13, live on `main`** — `gfw.yml` → `gfw_mpa_sweep.py` sweeps every Ia/Ib MPA for fishing effort and reports **named vessels**. Replaced a cron that had been green and fetching nothing for months. ⚠️ 1 of the first 3 nights failed on 429s (issue **#1**); pacing fix committed but **unverified**. |
+| **Offline test suite** | **335 tests**, pure stdlib, no network / keys / ML deps: `python -m unittest discover -s scripts/tests` |
 | **Eval / gating harness** | `eval_holdout.py` + `conf_sweep.py`, modality-agnostic via `--train-dir`. `PROMOTED_BY_TREE` stops an optical checkpoint leaking into a SAR gate. |
 | **Code health** | All `docs/AUDIT.md` P1/P2 findings closed. The P3 items are conscious house-style deferrals, not debt. |
 
-⚠️ **Two standing facts that will bite a future session** (not queued work — just true):
+⚠️ **Three standing facts that will bite a future session** (not queued work — just true):
 - **Every SAR run on disk predates W12 and holds RAW chips**, so it is out of domain for the promoted
   `sar-peak2`. Re-fetch with `--despeckle peak`, or re-filter with `sar_despeckle.py --run <dir>`.
   `manifest["chip_postprocess"]` says which a run is; a missing key means raw.
@@ -42,6 +44,8 @@ read **cold**, with no prior conversation context._
   dropped in 1.1 s, real key held 46.7 s with 0 frames, while a third-party push socket delivered
   fine). Account/key side, not the pipeline. Historical AIS via `marinecadastre_fetch.py` is
   unaffected and is what W3-B actually used.
+- **A green scheduled run proves nothing about what it collected.** The GFW cron passed nightly for
+  months while writing `entries: [null]`. If a job exists to gather data, assert on the **contents**.
 
 ### The optical gate — four holdout scenes, 300 boxes
 
@@ -77,7 +81,13 @@ so a better-fitted model fires *more* there. Judge on holdout FP/chip.
 
 # THE WORK QUEUE
 
-**Empty.** W1–W12 are all closed — see the results table below. No work is currently queued.
+**One open verification, no open build work.**
+
+| | Item | Why it is open |
+|---|---|---|
+| **W13-v** | Confirm the GFW nightly's 429 fix works | 1 of the first 3 nights failed on rate limiting (issue **#1** open). Pacing + a recalibrated capacity are committed but **no nightly has run with them yet**. Check `gh run list --workflow=gfw.yml`: expect ~1,298 regions in ~280 min with a low single-digit error count. If 429s persist, raise `--min-interval-s` first. |
+
+W1–W12 are closed and W13 shipped — see the results table below.
 
 ---
 
@@ -98,6 +108,7 @@ so a better-fitted model fires *more* there. Judge on holdout FP/chip.
 | **W10** | Re-run the despeckle A/B on the 2-region gate | 08-04 | ❌ refuted W6 | Not promoted. The precision claim did not replicate — see long-form. |
 | **W11** | SAR retrain on 3 new regions (2 arms) | 08-05 | ✅ promoted `sar-deep4` | Arm B (`sar-peak2`) won decisively but needed an inference change → became W12. Also caught an **ultralytics version confound** in W10's arm. |
 | **W12** | Despeckle at inference → promote `sar-peak2` | 08-06 | ✅ promoted `sar-peak2` | Mismatched preprocessing costs **two-thirds of recall, silently** — see long-form. |
+| **W13** | Rebuild the GFW nightly as an MPA sweep | 08-09/12 | ✅ live on `main` | The old cron had been **green and fetching nothing for months** — see long-form below. Now reports named vessels inside Ia/Ib MPAs; 3 nights in, ~120 vessel events/night. One night failed on 429s (issue #1); fix committed, unverified. |
 
 ---
 
@@ -249,6 +260,51 @@ a dive or whale-watching boat does.
 are"). The historical path is also *better* for this proof — you pick the date after the fact, so the
 scene and the AIS are guaranteed to be in the same window with no overpass timing to hit.
 
+## W13 — the nightly cron was green and fetching nothing, for months
+
+The lesson is not about GFW. It is that **a scheduled job's exit code says nothing about whether it
+did its job**, and no amount of workflow hygiene catches that. `gfw.yml` had `if-no-files-found:
+error`, retry/backoff, pip caching, and a passing run every night. It was writing this:
+
+```json
+"entries": [ { "public-global-fishing-effort:v4.0": null } ]
+```
+
+Because `date-range` is **half-open `[start, end)`** and the default set both ends to *yesterday* —
+an empty interval. There was no error to catch: GFW answered 200 with an empty result, the file was
+written, the artifact uploaded, the job went green. It took reading an actual artifact to see it.
+
+Two further faults were hiding underneath, each of which would have suppressed real detections on its
+own even after the range was fixed:
+
+- **The `trawlers` gear filter.** Filter values are **lowercase** while responses report uppercase, so
+  half of any gear-filtered query silently matches nothing. Worse, trawlers-only dropped a real
+  `OTHER_PURSE_SEINES` intrusion outright. In a no-take reserve *any* gear is the signal.
+- **The region was an unrelated EEZ**, not the MPAs the project exists for. GFW's `public-mpa-all`
+  context layer has `idProperty: SITE_PID` — our own `WDPA_PID` — so all 1,799 Ia/Ib MPAs resolve with
+  no mapping table. That was luck, and worth knowing before anyone builds a crosswalk.
+
+**Three faults, one symptom, zero alarms.** If a job exists to collect data, assert on the *contents*.
+
+**What it produces now.** With `group-by=VESSEL_ID` over an MPA region the response is **per vessel**,
+not a density grid — name, MMSI, flag, gear, fishing hours, entry/exit timestamps. That is an
+intrusion record, the same shape `geofence_ais.py` emits, computed server-side and needing no imagery.
+First live run: **GALOPIN** (ESP, drifting longlines) **7.59 h inside Malpelo**, a Colombian Ia
+reserve. Nightly volume is ~20 MPAs with effort and ~120 vessel events.
+
+**The operational shape was forced by the token, not chosen.** One in-flight request maximum, ~11 s
+per region, so full coverage of 1,799 MPAs cannot fit one CI job. Hence the two-tier design: MPAs
+above `--min-area` every night, the smaller tail rotating by date. Two details worth keeping:
+
+1. **Rotate the tier too, or starve it.** The first cut always swept the priority tier largest-first,
+   so whenever the clock ran out it truncated *at the same place every night* — the smallest members
+   would never be swept, while the run still reported covering "everything above the threshold". A
+   coverage bug that reports itself as success is the same class of failure as the empty range.
+2. **Calibrate on a representative sample.** The initial 24 s/region estimate came from timing the
+   **30 largest** MPAs; request time scales with polygon size, so it roughly doubled the true cost of
+   a mixed sweep and halved capacity — starving the tail to 2 MPAs a night for no reason. Three real
+   nights gave ~11 s and the estimate was corrected to 13 s.
+
 ---
 
 # DO NOT RE-ATTEMPT — measured dead ends
@@ -258,7 +314,7 @@ future session does not rediscover them. Do not undo these conclusions without n
 
 | Thing | Verdict | Why |
 |---|---|---|
-| **Parallelising GFW API calls** | ❌ the token allows ONE in-flight request (2026-08-09) | Strictly sequential calls returned **15/15 HTTP 200**; 6 workers failed **4/5** regions with 429, and even 2 workers *paced down to 0.29 req/s* failed **9/12**. Pacing does not help — the limit is on concurrent requests, not rate. It is not a quota problem either (`x-ratelimit-daily-limit-requests: 50000`, ~170 used). Keep `--workers 1`; raising it fails the sweep rather than speeding it up. |
+| **Parallelising GFW API calls** | ❌ the token allows ONE in-flight request (2026-08-09) | Strictly sequential calls returned **15/15 HTTP 200**; 6 workers failed **4/5** regions with 429, and even 2 workers *paced down to 0.29 req/s* failed **9/12** — so pacing cannot rescue **concurrency**. Not a quota problem either (`x-ratelimit-daily-limit-requests: 50000`, ~170 used). Parallel CI jobs do not help: the limit is per **token**, not per runner. Keep `--workers 1`. ⚠️ **Narrowed 2026-08-12** — do not read this as "pacing is useless". At concurrency **1** the failure rate scales *inversely with wall time* (08-11 at 8.6 s/region errored 37%; 08-12 at 10.6 s/region errored 3.5%), so `--min-interval-s` is a real lever there. Concurrency is rejected outright; the sequential rate limit is merely brushed. |
 | **A single-day GFW `date-range`** | ❌ always returns zero rows (2026-08-09) | `date-range=A,B` is **half-open [A, B)**. A vessel entered Nordaust-Svalbard at 2026-08-03T05:00Z: `2026-08-03,2026-08-03` → **0 rows**, `2026-08-03,2026-08-04` → 2 rows. The old `gfw_fetch.py` default set both ends to yesterday, so **every nightly cron run since the workflow was written fetched nothing while exiting 0**. Now a hard error. |
 | **Filtering GFW effort by `geartype` for MPA monitoring** | ❌ hides real intrusions (2026-08-09) | Filter values are **lowercase** while responses report uppercase, so `OTHER_PURSE_SEINES` matches nothing and `other_purse_seines` matches. Worse, the inherited `trawlers` filter dropped a genuine purse-seiner intrusion outright. In a no-take reserve **any** gear is the signal — send no filter. |
 | **A third same-class optical harvest to lift the recall *ceiling*** | ❌ two-for-two dead end (2026-08-06) | W1 (1093 boxes) and W4 (490 boxes) both left Kornati's conf-0.05 ceiling flat (0.904→0.891→0.897). Same-class positives buy **calibration**, never **perception**. Kornati R ~0.5–0.6 at usable precision is the **10 m GSD floor**, not a data gap → go structural (SAR/AIS). |
