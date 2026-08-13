@@ -465,8 +465,12 @@ from memory._
   origin/main..HEAD` is 0. The earlier note claiming this work was "uncommitted" was stale.
 - The nightly workflow therefore runs the **new** sweep; scheduled workflows only ever run from the
   default branch, which is why the merge was the step that actually made the fix live.
-- **Uncommitted right now:** the 2026-08-12 pacing/capacity tuning, the SB Channel export tag, and
-  this documentation pass — commit them before clearing context.
+- **Working tree is clean and everything is pushed** (`main` @ `e1d5424`, 2026-08-13): the nightly
+  rebuild, the pacing/capacity tuning, and this documentation pass. The only artifact that exists
+  *only locally* is the SB Channel export tag, because `data/processed/training_exports/` is
+  gitignored — `export_labels.py` regenerates it from `reviews.json`.
+- Because the tuning is on `main`, **the next scheduled nightly (00:00 UTC) is the verification run**
+  for W13-v. Nothing needs to be triggered by hand.
 - Offline suite: **335 tests** (`python -m unittest discover -s scripts/tests`), pure stdlib.
 - **GitHub issue #1 is OPEN** — the 2026-08-11 nightly failure. Close it once a nightly passes with
   the pacing fix in place.
