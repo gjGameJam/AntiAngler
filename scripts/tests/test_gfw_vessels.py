@@ -35,12 +35,34 @@ class TestMmsiCollectors(unittest.TestCase):
         doc = {"positions": [{"mmsi": "111"}, {"mmsi": 222}, {"lon": 1}]}
         self.assertEqual(gv.mmsis_from_ais(doc), ["111", "222"])
 
+    def test_from_sweep_takes_every_event_mmsi(self):
+        doc = {"events": [
+            {"wdpa_pid": "1", "mmsi": "111"},
+            {"wdpa_pid": "2", "mmsi": "111"},     # same vessel, second MPA — dedup is collect's job
+            {"wdpa_pid": "1", "mmsi": 222},
+            {"wdpa_pid": "1", "mmsi": None},      # tolerated: an event with no MMSI
+        ]}
+        self.assertEqual(gv.mmsis_from_sweep(doc), ["111", "111", "222"])
+
     def test_collect_dedups_and_orders(self):
         class A:
             mmsi = "111, 222, 111"
             from_events = None
             from_ais = None
+            from_sweep = None
         self.assertEqual(gv.collect_mmsis(A()), ["111", "222"])
+
+    def test_collect_includes_sweep_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sweep = Path(tmp) / "gfw_mpa_sweep_x.json"
+            sweep.write_text(json.dumps({"events": [{"mmsi": "333"}, {"mmsi": "111"}]}))
+
+            class A:
+                mmsi = "111"
+                from_events = None
+                from_ais = None
+                from_sweep = sweep
+            self.assertEqual(gv.collect_mmsis(A()), ["111", "333"])
 
 
 class TestIdentity(unittest.TestCase):

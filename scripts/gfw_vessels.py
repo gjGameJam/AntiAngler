@@ -14,7 +14,8 @@ import _http  # stdlib-only at import time; lazy-imports requests inside build_s
 
 # The objective of this script (GFW per-vessel ingestion, ROADMAP Phase 3 step 3):
 # - Take a set of MMSIs (explicit --mmsi, or pulled from a fuse_violations violation_events.json
-#   via --from-events, or an AIS positions file via --from-ais)
+#   via --from-events, an AIS positions file via --from-ais, or a gfw_mpa_sweep_*.json via
+#   --from-sweep — the nightly's intrusion vessels, for the sweep_digest.py --vessels join)
 # - Resolve each to GFW vessel IDENTITY (Vessels search: vesselId, shipname, flag, geartype, imo)
 # - Summarize its recent FISHING activity (Events API: fishing_hours + a coarse fishing_probability;
 #   with --region-bbox / --wdpa-id the fishing events are filtered to the MPA, so fishing_probability
@@ -73,6 +74,10 @@ def parse_args(argv=None):
                           "(exactly the vessels an enrichment pass would use).")
     src.add_argument("--from-ais", type=Path, default=env_or("GFWV_FROM_AIS", None),
                      help="A normalized AIS positions file; pulls every MMSI seen.")
+    src.add_argument("--from-sweep", type=Path, default=env_or("GFWV_FROM_SWEEP", None),
+                     help="A gfw_mpa_sweep_*.json (nightly MPA sweep); pulls every event's MMSI. "
+                          "Pair with --insights and bracket the sweep's window with --start/--end, "
+                          "then feed the output to sweep_digest.py --vessels for IUU/AIS-off flags.")
     p.add_argument("--start", default=env_or("GFWV_START", None),
                    help="YYYY-MM-DD activity-window start. Default: 7 days before --end. Set this to "
                         "bracket the scene date so fishing_probability reflects the relevant window.")
@@ -137,8 +142,21 @@ def mmsis_from_ais(doc):
     return out
 
 
+def mmsis_from_sweep(doc):
+    """Every MMSI in a gfw_mpa_sweep_*.json (events are per-(MPA, vessel), so a vessel seen in
+    two MPAs appears twice here; collect_mmsis de-duplicates)."""
+    events = doc.get("events", []) if isinstance(doc, dict) else (doc or [])
+    out = []
+    for e in events:
+        mmsi = e.get("mmsi")
+        if mmsi not in (None, ""):
+            out.append(str(mmsi))
+    return out
+
+
 def collect_mmsis(args):
-    """Union of MMSIs from --mmsi / --from-events / --from-ais, de-duplicated, order preserved."""
+    """Union of MMSIs from --mmsi / --from-events / --from-ais / --from-sweep, de-duplicated,
+    order preserved."""
     seen, ordered = set(), []
     def add(values):
         for v in values:
@@ -152,6 +170,8 @@ def collect_mmsis(args):
         add(mmsis_from_events(json.loads(Path(args.from_events).read_text(encoding="utf-8"))))
     if args.from_ais:
         add(mmsis_from_ais(json.loads(Path(args.from_ais).read_text(encoding="utf-8"))))
+    if getattr(args, "from_sweep", None):
+        add(mmsis_from_sweep(json.loads(Path(args.from_sweep).read_text(encoding="utf-8"))))
     return ordered
 
 
@@ -562,7 +582,7 @@ def main(argv=None):
     mmsis = collect_mmsis(args)
     if not mmsis:
         raise RuntimeError("No MMSIs. Provide --mmsi 1,2,3 and/or --from-events <violation_events.json> "
-                           "and/or --from-ais <positions.json>.")
+                           "and/or --from-ais <positions.json> and/or --from-sweep <gfw_mpa_sweep.json>.")
     start, end = resolve_window(args.start, args.end)
     region_bbox, region_label = resolve_region_bbox(args)
 
